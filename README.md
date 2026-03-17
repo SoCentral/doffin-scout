@@ -1,7 +1,7 @@
 # Doffin Scout 🔍
 
 Daglig Doffin-scanner for SoCentral. Kjører kl. 09:00 Oslo-tid, henter aktive 
-offentlige anskaffelser (1M–1B NOK), analyserer dem med Claude, og sender 
+offentlige anskaffelser (100k–50M NOK), analyserer dem med Claude, og sender 
 relevante muligheter til thomas.evensen@socentral.no på epost.
 
 ---
