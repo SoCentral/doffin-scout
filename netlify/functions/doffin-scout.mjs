@@ -52,7 +52,6 @@ RELEVANT_COUNT: [tall]
 For HVER relevant anskaffelse:
 **[Tittel]** – [Oppdragsgiver]
 - Estimert verdi: [beløp eller "ikke oppgitt"]
-- Søknadsfrist: [dato eller "ikke oppgitt"]
 - Relevans: [1-2 setninger om hvorfor dette passer SoCentral]
 - 🔗 [Se utlysning på Doffin]([lenke])
 
@@ -150,7 +149,7 @@ async function fetchTotalCount(issueDateFrom, issueDateTo) {
     numHitsPerPage: "1",
     page: "1",
     status: "ACTIVE",
-    issueDateFrom,
+    issueDateFrom, // Korrekt parameternavn iflg. API-dok
     issueDateTo,
   });
 
@@ -161,11 +160,13 @@ async function fetchTotalCount(issueDateFrom, issueDateTo) {
   if (!res.ok) throw new Error(`Doffin API (total) returnerte ${res.status}`);
 
   const data = await res.json();
-  // API returnerer typisk totalHits, total, eller numHits
-  return data.totalHits ?? data.total ?? data.numHits ?? data.hits?.length ?? 0;
+  console.log("[doffin-scout] numHitsTotal:", data.numHitsTotal);
+
+  // Korrekt feltnavn iflg. API-dok: numHitsTotal
+  return data.numHitsTotal ?? 0;
 }
 
-// Henter anskaffelser i verdiintervallet 1M–1B for analyse
+// Henter anskaffelser i verdiintervallet 100k–50M for analyse
 async function fetchDoffinNotices(issueDateFrom, issueDateTo) {
   const params = new URLSearchParams({
     numHitsPerPage: "50",
@@ -173,7 +174,7 @@ async function fetchDoffinNotices(issueDateFrom, issueDateTo) {
     estimatedValueFrom: "100000",
     estimatedValueTo: "50000000",
     status: "ACTIVE",
-    issueDateFrom,
+    issueDateFrom, // Korrekt parameternavn iflg. API-dok
     issueDateTo,
     sortBy: "PUBLICATION_DATE_DESC",
   });
@@ -195,7 +196,8 @@ async function fetchDoffinNotices(issueDateFrom, issueDateTo) {
 }
 
 function buildDoffinLink(notice) {
-  const id = notice.doffinId ?? notice.id ?? notice.noticeId ?? null;
+  // Iflg. API-dok er feltet bare kalt "id"
+  const id = notice.id ?? null;
   if (!id) return null;
   return `${DOFFIN_BASE_URL}/${id}`;
 }
@@ -205,27 +207,21 @@ function buildDoffinLink(notice) {
 async function analyzeWithClaude(notices, yesterday) {
   const noticesSummary = notices
     .map((n, i) => {
-      const title = n.title ?? n.name ?? "Uten tittel";
-      const buyer =
-        n.contracting_authority?.name ??
-        n.buyer?.name ??
-        "Ukjent oppdragsgiver";
-      const value = n.estimated_value
-        ? `${Number(n.estimated_value).toLocaleString("nb-NO")} NOK`
+      // Korrekte feltnavn iflg. API-dok: heading, buyer[].name, estimatedValue.amount
+      const title = n.heading ?? "Uten tittel";
+      const buyer = n.buyer?.[0]?.name ?? "Ukjent oppdragsgiver";
+      const value = n.estimatedValue?.amount
+        ? `${Number(n.estimatedValue.amount).toLocaleString("nb-NO")} ${n.estimatedValue.currencyCode ?? "NOK"}`
         : "Ikke oppgitt";
-      const deadline = n.deadline ?? n.submission_deadline ?? "Ikke oppgitt";
-      const description = (n.description ?? n.short_description ?? "").slice(
-        0,
-        500,
-      );
-      const link = n.doffinLink ?? n.url ?? "Ikke tilgjengelig";
+      const description = (n.description ?? "").slice(0, 500);
+      // Ingen frist i søkeresultatet iflg. API-dok – kun id, heading, buyer, estimatedValue, description
+      const link = n.doffinLink ?? "Ikke tilgjengelig";
 
       return [
         `--- Anskaffelse ${i + 1} ---`,
         `Tittel: ${title}`,
         `Oppdragsgiver: ${buyer}`,
         `Estimert verdi: ${value}`,
-        `Frist: ${deadline}`,
         `Lenke: ${link}`,
         description ? `Beskrivelse: ${description}` : "",
       ]
