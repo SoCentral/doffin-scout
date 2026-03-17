@@ -6,11 +6,8 @@
   node_bundler = "esbuild"
 
 [dev]
-  command    = "echo 'Ingen frontend – kun functions'"
   port       = 8888          # Netlify dev UI på http://localhost:8888
-  targetPort = 3999          # Intern dev-port – eksplisitt for å unngå konflikt
   autoLaunch = false         # Åpne ikke nettleser automatisk
-  framework  = "#static"     # Ingen frontend-framework
 
 [[plugins]]
   package = "@netlify/plugin-functions-install-core"
