@@ -8,7 +8,7 @@ export const config = {
   schedule: "0 7 * * *",
 };
 
-const DOFFIN_API_URL = "https://betaapi.doffin.no/public/v2/search";
+const DOFFIN_API_URL = "https://api.doffin.no/public/v2/search";
 const DOFFIN_BASE_URL = "https://doffin.no/notices";
 
 const SOCENTRAL_CONTEXT = `
@@ -45,20 +45,20 @@ Når du analyserer anskaffelser, se etter:
 
 Svar i NØYAKTIG dette formatet – ikke legg til noe utenfor strukturen:
 
-RELEVANT_COUNT: [tall]
+RELEVANT_IDS: [kommaseparert liste med id-er på relevante anskaffelser, f.eks. "2026-100123,2026-100456"]
 
 ## Relevante muligheter
 
 For HVER relevant anskaffelse:
 **[Tittel]** – [Oppdragsgiver]
 - Estimert verdi: [beløp eller "ikke oppgitt"]
+- Søknadsfrist: [dato eller "ikke oppgitt"]
 - Relevans: [1-2 setninger om hvorfor dette passer SoCentral]
 - 🔗 [Se utlysning på Doffin]([lenke])
 
 ## Oppsummering
-[2-3 setninger. Hvis ingen relevante: si det tydelig.]
+[2-3 setninger. Hvis ingen relevante: si det tydelig. Hvis ingen relevante, sett RELEVANT_IDS: tom]
 
-Hopp over åpenbart irrelevante anskaffelser (bygg/anlegg, IKT-infrastruktur, renholdstjenester, varekjøp osv.).
 Svar på norsk.
 `.trim();
 
@@ -68,36 +68,40 @@ export default async function handler() {
   console.log("[doffin-scout] Starter daglig kjøring...");
 
   try {
-    const { yesterday, today } = getDateRange();
-    console.log(`[doffin-scout] Henter anskaffelser publisert ${yesterday}`);
+    const { apiDate, yesterday } = getDateRange();
+    console.log(
+      `[doffin-scout] Henter anskaffelser (API-dato: ${apiDate}, norsk dato: ${yesterday})`,
+    );
 
-    // Hent 1: totalt antall nye utlysninger i går (alle verdier)
-    const totalCount = await fetchTotalCount(yesterday, today);
-    console.log(`[doffin-scout] Totalt nye utlysninger i går: ${totalCount}`);
-
-    // Hent 2: utlysninger i verdiintervallet 1M–1B for analyse
-    const notices = await fetchDoffinNotices(yesterday, today);
-    console.log(`[doffin-scout] Anskaffelser i 1M–1B NOK: ${notices.length}`);
+    const { totalCount, notices } = await fetchDoffinNotices(apiDate);
+    console.log(
+      `[doffin-scout] Totalt nye utlysninger i går: ${totalCount}, hentet: ${notices.length}`,
+    );
 
     const subject = `Doffin Scout – ${formatNorwegianDate(new Date())}`;
 
     if (notices.length === 0) {
-      const html = formatEmailHtml(null, totalCount, 0, 0, yesterday);
+      const html = formatEmailHtml(null, totalCount, 0, [], yesterday);
       await sendEmail(subject, html);
       return;
     }
 
-    const { analysis, relevantCount } = await analyzeWithClaude(
+    const { analysis, relevantIds } = await analyzeWithClaude(
       notices,
       yesterday,
     );
-    console.log(`[doffin-scout] Relevante for SoCentral: ${relevantCount}`);
+    console.log(
+      `[doffin-scout] Relevante for SoCentral: ${relevantIds.length}`,
+    );
+
+    // Bygg liste over ALLE ikke-relevante fra faktiske API-data – ingen hallusinering
+    const nonRelevant = notices.filter((n) => !relevantIds.includes(n.id));
 
     const html = formatEmailHtml(
       analysis,
       totalCount,
-      notices.length,
-      relevantCount,
+      relevantIds.length,
+      nonRelevant,
       yesterday,
     );
     await sendEmail(subject, html);
@@ -114,12 +118,24 @@ export default async function handler() {
 // ─── Datoberegning ────────────────────────────────────────────────────────────
 
 function getDateRange() {
+  // Prod-API-et (api.doffin.no) bruker norsk dato direkte i issueDateFrom/To.
+  // issueDateFrom=2026-03-17 gir utlysninger publisert norsk 17. mars — ingen offset.
+  // Funksjonen kjører kl. 07:00 UTC (09:00 Oslo) → henter gårsdagens utlysninger.
   const today = new Date();
   const yesterday = new Date(today);
   yesterday.setDate(yesterday.getDate() - 1);
+
+  // Norsk dato: bruk Oslo-tid (UTC+1 vinter, UTC+2 sommer)
+  const osloDate = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Europe/Oslo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(yesterday);
+
   return {
-    yesterday: yesterday.toISOString().split("T")[0],
-    today: today.toISOString().split("T")[0],
+    apiDate: osloDate, // YYYY-MM-DD i norsk tidssone
+    yesterday: osloDate,
   };
 }
 
@@ -143,39 +159,15 @@ function formatNorwegianDateFromString(dateStr) {
 
 // ─── Doffin API ───────────────────────────────────────────────────────────────
 
-// Henter totalt antall nye utlysninger i går (alle verdier, numHitsPerPage=1 for effektivitet)
-async function fetchTotalCount(issueDateFrom, issueDateTo) {
+// Henter alle nye utlysninger fra i går.
+// Prod-API-et returnerer full beskrivelse i søkeresultatet — download ikke nødvendig.
+async function fetchDoffinNotices(apiDate) {
   const params = new URLSearchParams({
-    numHitsPerPage: "1",
+    numHitsPerPage: "100",
     page: "1",
     status: "ACTIVE",
-    issueDateFrom, // Korrekt parameternavn iflg. API-dok
-    issueDateTo,
-  });
-
-  const res = await fetch(`${DOFFIN_API_URL}?${params}`, {
-    headers: { "Ocp-Apim-Subscription-Key": process.env.DOFFIN_API_KEY },
-  });
-
-  if (!res.ok) throw new Error(`Doffin API (total) returnerte ${res.status}`);
-
-  const data = await res.json();
-  console.log("[doffin-scout] numHitsTotal:", data.numHitsTotal);
-
-  // Korrekt feltnavn iflg. API-dok: numHitsTotal
-  return data.numHitsTotal ?? 0;
-}
-
-// Henter anskaffelser i verdiintervallet 100k–50M for analyse
-async function fetchDoffinNotices(issueDateFrom, issueDateTo) {
-  const params = new URLSearchParams({
-    numHitsPerPage: "50",
-    page: "1",
-    estimatedValueFrom: "100000",
-    estimatedValueTo: "50000000",
-    status: "ACTIVE",
-    issueDateFrom, // Korrekt parameternavn iflg. API-dok
-    issueDateTo,
+    issueDateFrom: apiDate,
+    issueDateTo: apiDate,
     sortBy: "PUBLICATION_DATE_DESC",
   });
 
@@ -187,19 +179,17 @@ async function fetchDoffinNotices(issueDateFrom, issueDateTo) {
     throw new Error(`Doffin API returnerte ${res.status}: ${res.statusText}`);
 
   const data = await res.json();
-  const hits = data.hits ?? data.notices ?? data.results ?? [];
+  const totalCount = data.numHitsTotal ?? 0;
+  console.log("[doffin-scout] numHitsTotal:", totalCount);
 
-  return hits.map((n) => ({
-    ...n,
-    doffinLink: buildDoffinLink(n),
-  }));
-}
-
-function buildDoffinLink(notice) {
-  // Iflg. API-dok er feltet bare kalt "id"
-  const id = notice.id ?? null;
-  if (!id) return null;
-  return `${DOFFIN_BASE_URL}/${id}`;
+  const hits = data.hits ?? [];
+  return {
+    totalCount,
+    notices: hits.map((h) => ({
+      ...h,
+      doffinLink: `${DOFFIN_BASE_URL}/${h.id}`,
+    })),
+  };
 }
 
 // ─── Claude API ───────────────────────────────────────────────────────────────
@@ -207,23 +197,34 @@ function buildDoffinLink(notice) {
 async function analyzeWithClaude(notices, yesterday) {
   const noticesSummary = notices
     .map((n, i) => {
-      // Korrekte feltnavn iflg. API-dok: heading, buyer[].name, estimatedValue.amount
       const title = n.heading ?? "Uten tittel";
       const buyer = n.buyer?.[0]?.name ?? "Ukjent oppdragsgiver";
       const value = n.estimatedValue?.amount
         ? `${Number(n.estimatedValue.amount).toLocaleString("nb-NO")} ${n.estimatedValue.currencyCode ?? "NOK"}`
         : "Ikke oppgitt";
-      const description = (n.description ?? "").slice(0, 500);
-      // Ingen frist i søkeresultatet iflg. API-dok – kun id, heading, buyer, estimatedValue, description
+      // Prod-API returnerer full beskrivelse i søkeresultatet
+      const description = (n.description ?? "").slice(0, 1000);
+      // lots kan inneholde ytterligere detaljer
+      const lotsText = (n.lots ?? [])
+        .map((l) => l.description ?? "")
+        .filter(Boolean)
+        .join(" ")
+        .slice(0, 500);
+      const deadline = n.deadline
+        ? `Frist: ${new Date(n.deadline).toLocaleDateString("nb-NO")}`
+        : "";
       const link = n.doffinLink ?? "Ikke tilgjengelig";
 
       return [
         `--- Anskaffelse ${i + 1} ---`,
+        `ID: ${n.id}`,
         `Tittel: ${title}`,
         `Oppdragsgiver: ${buyer}`,
         `Estimert verdi: ${value}`,
+        deadline,
         `Lenke: ${link}`,
         description ? `Beskrivelse: ${description}` : "",
+        lotsText ? `Delkontrakter: ${lotsText}` : "",
       ]
         .filter(Boolean)
         .join("\n");
@@ -255,14 +256,25 @@ async function analyzeWithClaude(notices, yesterday) {
   const data = await res.json();
   const rawText = data.content?.[0]?.text ?? "";
 
-  // Trekk ut RELEVANT_COUNT fra starten av svaret
-  const countMatch = rawText.match(/^RELEVANT_COUNT:\s*(\d+)/m);
-  const relevantCount = countMatch ? parseInt(countMatch[1], 10) : 0;
+  // Trekk ut RELEVANT_IDS fra starten av svaret
+  const idsMatch = rawText.match(/^RELEVANT_IDS:\s*(.+)$/m);
+  const relevantIds = idsMatch
+    ? idsMatch[1]
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : [];
 
-  // Fjern RELEVANT_COUNT-linjen fra teksten som vises
-  const analysis = rawText.replace(/^RELEVANT_COUNT:.*\n?/m, "").trim();
+  // Fjern RELEVANT_IDS-linjen fra teksten som vises
+  const analysis = rawText.replace(/^RELEVANT_IDS:.*\n?/m, "").trim();
 
-  return { analysis, relevantCount };
+  // Debug: logg hva Claude faktisk svarte
+  console.log(
+    "[doffin-scout] Claude råsvar (første 1000 tegn):\n",
+    analysis.slice(0, 1000),
+  );
+
+  return { analysis, relevantIds };
 }
 
 // ─── Epost via Resend ─────────────────────────────────────────────────────────
@@ -293,77 +305,378 @@ async function sendEmail(subject, html) {
 function formatEmailHtml(
   markdownAnalysis,
   totalCount,
-  analyzedCount,
   relevantCount,
+  nonRelevantNotices,
   yesterday,
 ) {
   const date = formatNorwegianDate(new Date());
   const yesterdayFormatted = formatNorwegianDateFromString(yesterday);
 
-  // Statistikkbanner
-  const statsHtml = `
-    <table style="width:100%;border-collapse:collapse;margin-bottom:20px">
-      <tr>
-        <td style="text-align:center;padding:14px 8px;background:#fff;border:1px solid #e0e0e0;border-radius:6px">
-          <div style="font-size:28px;font-weight:bold;color:#1a1a2e">${totalCount}</div>
-          <div style="font-size:12px;color:#666;margin-top:2px">nye utlysninger<br>på Doffin i går</div>
-        </td>
-        <td style="width:20px;text-align:center;color:#ccc;font-size:20px">→</td>
-        <td style="text-align:center;padding:14px 8px;background:#fff;border:1px solid #e0e0e0;border-radius:6px">
-          <div style="font-size:28px;font-weight:bold;color:#1a1a2e">${analyzedCount}</div>
-          <div style="font-size:12px;color:#666;margin-top:2px">analysert<br>(verdi 100k–50M NOK)</div>
-        </td>
-        <td style="width:20px;text-align:center;color:#ccc;font-size:20px">→</td>
-        <td style="text-align:center;padding:14px 8px;background:#eef7ee;border:1px solid #b2d8b2;border-radius:6px">
-          <div style="font-size:28px;font-weight:bold;color:#2a7a2a">${relevantCount}</div>
-          <div style="font-size:12px;color:#4a8a4a;margin-top:2px">relevante<br>for SoCentral</div>
-        </td>
-      </tr>
-    </table>`;
-
-  let bodyHtml = "";
-  if (!markdownAnalysis || analyzedCount === 0) {
-    bodyHtml = `<p style="color:#666">Ingen anskaffelser i verdiintervallet 100k–50M NOK ble publisert på Doffin ${yesterdayFormatted}.</p>`;
-  } else {
-    bodyHtml = markdownAnalysis
-      .replace(
-        /^## (.+)$/gm,
-        "<h2 style='color:#1a1a2e;margin-top:24px;margin-bottom:8px'>$1</h2>",
-      )
-      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-      .replace(
-        /🔗 \[(.+?)\]\((.+?)\)/g,
-        '🔗 <a href="$2" style="color:#0066cc;text-decoration:none">$1</a>',
-      )
-      .replace(
-        /\[(.+?)\]\((.+?)\)/g,
-        '<a href="$2" style="color:#0066cc;text-decoration:none">$1</a>',
-      )
-      .replace(/^- (.+)$/gm, "<li style='margin:4px 0'>$1</li>")
-      .replace(
-        /(<li[^>]*>.*<\/li>\n?)+/g,
-        "<ul style='margin:8px 0;padding-left:20px'>$&</ul>",
-      )
-      .replace(/\n\n/g, "</p><p style='margin:12px 0'>")
-      .replace(/\n/g, "<br>");
-  }
-
   return `<!DOCTYPE html>
 <html lang="no">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
-<body style="font-family:Arial,sans-serif;max-width:680px;margin:0 auto;padding:24px;color:#222;background:#fff">
-  <div style="background:#1a1a2e;color:white;padding:20px 24px;border-radius:8px 8px 0 0">
-    <h1 style="margin:0;font-size:20px">🔍 Doffin Scout</h1>
-    <p style="margin:6px 0 0;opacity:.8;font-size:14px">${date} &nbsp;·&nbsp; Utlysninger publisert ${yesterdayFormatted}</p>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light">
+  <title>Doffin Scout</title>
+  <style>
+    /* Reset */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    /* Base */
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+      font-size: 15px;
+      line-height: 1.5;
+      color: #1d1d1f;
+      background: #f5f5f7;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .wrapper {
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 24px 16px;
+    }
+
+    /* Header */
+    .header {
+      background: #1d1d1f;
+      border-radius: 16px 16px 0 0;
+      padding: 28px 28px 24px;
+    }
+    .header-label {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #86868b;
+      margin-bottom: 6px;
+    }
+    .header-title {
+      font-size: 22px;
+      font-weight: 700;
+      color: #f5f5f7;
+      letter-spacing: -0.3px;
+    }
+    .header-sub {
+      font-size: 13px;
+      color: #86868b;
+      margin-top: 4px;
+    }
+
+    /* Stats */
+    .stats {
+      background: #fff;
+      border-left: 1px solid #e5e5e5;
+      border-right: 1px solid #e5e5e5;
+      padding: 20px 28px;
+      display: flex;
+      gap: 0;
+    }
+    .stat {
+      flex: 1;
+      text-align: center;
+      padding: 0 12px;
+      border-right: 1px solid #e5e5e5;
+    }
+    .stat:last-child { border-right: none; }
+    .stat-number {
+      font-size: 32px;
+      font-weight: 700;
+      letter-spacing: -1px;
+      color: #1d1d1f;
+      line-height: 1;
+    }
+    .stat-number.green { color: #1d7a3c; }
+    .stat-label {
+      font-size: 11px;
+      color: #86868b;
+      margin-top: 4px;
+      line-height: 1.3;
+    }
+    .arrow {
+      display: flex;
+      align-items: center;
+      padding: 0 4px;
+      color: #c7c7cc;
+      font-size: 18px;
+    }
+
+    /* Body */
+    .body {
+      background: #fff;
+      border: 1px solid #e5e5e5;
+      border-top: none;
+      padding: 28px;
+    }
+
+    /* Relevant section */
+    .section-label {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #86868b;
+      margin-bottom: 16px;
+    }
+
+    .notice-card {
+      border: 1px solid #e5e5e5;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 12px;
+    }
+    .notice-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: #1d1d1f;
+      margin-bottom: 2px;
+    }
+    .notice-buyer {
+      font-size: 13px;
+      color: #86868b;
+      margin-bottom: 10px;
+    }
+    .notice-meta {
+      font-size: 13px;
+      color: #3a3a3c;
+      margin-bottom: 8px;
+    }
+    .notice-relevance {
+      font-size: 14px;
+      color: #1d1d1f;
+      line-height: 1.5;
+      margin-bottom: 10px;
+    }
+    .notice-link {
+      display: inline-block;
+      font-size: 13px;
+      font-weight: 500;
+      color: #0071e3;
+      text-decoration: none;
+    }
+
+    /* Summary */
+    .summary {
+      background: #f5f5f7;
+      border-radius: 10px;
+      padding: 14px 16px;
+      font-size: 14px;
+      color: #3a3a3c;
+      margin-top: 20px;
+      line-height: 1.6;
+    }
+
+    /* Divider */
+    .divider {
+      border: none;
+      border-top: 1px solid #e5e5e5;
+      margin: 24px 0;
+    }
+
+    /* Non-relevant list */
+    .nonrelevant-label {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #86868b;
+      margin-bottom: 12px;
+    }
+    .nonrelevant-item {
+      padding: 10px 0;
+      border-bottom: 1px solid #f2f2f2;
+    }
+    .nonrelevant-item:last-child { border-bottom: none; }
+    .nonrelevant-link {
+      font-size: 14px;
+      font-weight: 500;
+      color: #0071e3;
+      text-decoration: none;
+      display: block;
+      margin-bottom: 2px;
+    }
+    .nonrelevant-buyer {
+      font-size: 12px;
+      color: #86868b;
+    }
+
+    /* Footer */
+    .footer {
+      border-radius: 0 0 16px 16px;
+      background: #f5f5f7;
+      border: 1px solid #e5e5e5;
+      border-top: none;
+      padding: 14px 28px;
+      text-align: center;
+      font-size: 12px;
+      color: #86868b;
+    }
+    .footer a { color: #86868b; text-decoration: none; }
+
+    /* Mobile */
+    @media (max-width: 480px) {
+      .wrapper { padding: 12px 8px; }
+      .header { padding: 20px; border-radius: 12px 12px 0 0; }
+      .header-title { font-size: 19px; }
+      .body { padding: 20px; }
+      .stat-number { font-size: 26px; }
+      .stats { padding: 16px 20px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+
+    <!-- Header -->
+    <div class="header">
+      <div class="header-label">Doffin Scout · SoCentral</div>
+      <div class="header-title">Nye anskaffelser</div>
+      <div class="header-sub">${date} &nbsp;·&nbsp; Publisert ${yesterdayFormatted}</div>
+    </div>
+
+    <!-- Stats -->
+    <div class="stats">
+      <div class="stat">
+        <div class="stat-number">${totalCount}</div>
+        <div class="stat-label">nye utlysninger<br>på Doffin</div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="stat">
+        <div class="stat-number green">${relevantCount}</div>
+        <div class="stat-label">relevante<br>for SoCentral</div>
+      </div>
+    </div>
+
+    <!-- Body -->
+    <div class="body">
+
+      ${
+        relevantCount > 0
+          ? `
+      <!-- Relevant notices -->
+      <div class="section-label">Relevante muligheter</div>
+      ${buildRelevantCardsHtml(markdownAnalysis)}
+      `
+          : `
+      <p style="color:#86868b;font-size:14px">Ingen av dagens utlysninger ble vurdert som relevante for SoCentral.</p>
+      `
+      }
+
+      <!-- Summary -->
+      ${buildSummaryHtml(markdownAnalysis)}
+
+      ${
+        nonRelevantNotices && nonRelevantNotices.length > 0
+          ? `
+      <hr class="divider">
+      <!-- Non-relevant -->
+      <div class="nonrelevant-label">Øvrige utlysninger (${nonRelevantNotices.length})</div>
+      ${nonRelevantNotices
+        .map(
+          (n) => `
+        <div class="nonrelevant-item">
+          <a href="${n.doffinLink ?? "#"}" class="nonrelevant-link">${n.heading ?? "Uten tittel"}</a>
+          <div class="nonrelevant-buyer">${n.buyer?.[0]?.name ?? ""}</div>
+        </div>
+      `,
+        )
+        .join("")}
+      `
+          : ""
+      }
+
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+      Generert av Doffin Scout · SoCentral AS ·
+      <a href="https://doffin.no">doffin.no</a>
+    </div>
+
   </div>
-  <div style="background:#f9f9f9;padding:24px;border-radius:0 0 8px 8px;border:1px solid #e0e0e0;border-top:none">
-    ${statsHtml}
-    <p style="margin:0 0 12px">${bodyHtml}</p>
-  </div>
-  <p style="color:#aaa;font-size:12px;margin-top:16px;text-align:center">
-    Generert automatisk av Doffin Scout · SoCentral AS ·
-    <a href="https://doffin.no" style="color:#aaa">doffin.no</a>
-  </p>
 </body>
 </html>`;
+}
+
+// Trekker ut relevante utlysninger fra Claude-analysen og bygger kort
+function buildRelevantCardsHtml(analysis) {
+  if (!analysis) return "";
+
+  // Del opp på **Tittel** – Oppdragsgiver mønster
+  const cards = [];
+  const lines = analysis.split("\n");
+  let currentCard = null;
+
+  for (const line of lines) {
+    const titleMatch = line.match(/^\*\*(.+?)\*\*\s*[–-]\s*(.+)$/);
+    if (titleMatch) {
+      if (currentCard) cards.push(currentCard);
+      currentCard = {
+        title: titleMatch[1].trim(),
+        buyer: titleMatch[2].trim(),
+        meta: [],
+        relevance: "",
+        link: "",
+      };
+      continue;
+    }
+    if (!currentCard) continue;
+
+    const metaMatch = line.match(
+      /^[-*]\s*(Estimert verdi|Søknadsfrist|Frist):\s*(.+)$/,
+    );
+    if (metaMatch) {
+      currentCard.meta.push(`${metaMatch[1]}: ${metaMatch[2]}`);
+      continue;
+    }
+
+    const relevanceMatch = line.match(/^[-*]\s*Relevans:\s*(.+)$/);
+    if (relevanceMatch) {
+      currentCard.relevance = relevanceMatch[1];
+      continue;
+    }
+
+    const linkMatch = line.match(/\[Se utlysning[^\]]*\]\((.+?)\)/);
+    if (linkMatch) {
+      currentCard.link = linkMatch[1];
+      continue;
+    }
+  }
+  if (currentCard) cards.push(currentCard);
+
+  if (cards.length === 0) {
+    // Fallback: vis ren tekst hvis parsing feiler
+    return `<div style="font-size:14px;line-height:1.6;color:#1d1d1f">${analysis
+      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+      .replace(
+        /\[(.+?)\]\((.+?)\)/g,
+        '<a href="$2" style="color:#0071e3">$1</a>',
+      )
+      .replace(/\n/g, "<br>")}</div>`;
+  }
+
+  return cards
+    .map(
+      (card) => `
+    <div class="notice-card">
+      <div class="notice-title">${card.title}</div>
+      <div class="notice-buyer">${card.buyer}</div>
+      ${card.meta.map((m) => `<div class="notice-meta">${m}</div>`).join("")}
+      ${card.relevance ? `<div class="notice-relevance">${card.relevance}</div>` : ""}
+      ${card.link ? `<a href="${card.link}" class="notice-link">Se utlysning på Doffin →</a>` : ""}
+    </div>
+  `,
+    )
+    .join("");
+}
+
+// Trekker ut oppsummeringsteksten fra Claude-analysen
+function buildSummaryHtml(analysis) {
+  if (!analysis) return "";
+  const match = analysis.match(/## Oppsummering\s*([\s\S]+?)(?:## |$)/);
+  if (!match) return "";
+  const text = match[1].trim().replace(/\n/g, "<br>");
+  return `<div class="summary">${text}</div>`;
 }
