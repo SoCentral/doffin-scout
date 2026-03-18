@@ -44,6 +44,11 @@ Når du analyserer anskaffelser, se etter:
 5. Klima, bærekraft, sirkulærøkonomi
 6. Demokrati, inkludering, integrering
 
+Kategoriser hver anskaffelse i én av tre grupper:
+- **relevant**: Klar match – SoCentral kan levere dette uten store tilpasninger.
+- **maybe**: Mulig match – tangerer SoCentrals arbeidsområder, men krever tolkning eller samarbeid. Eksempel: en kommune som lyser ut «innbyggerinvolvering i planprosess» der vi ikke er eksplisitt nevnt, eller et kurs i «samfunnsentreprenørskap» som vi kan levere med tilpasning.
+- **ikke relevant**: Klart utenfor SoCentrals mandat (bygg, IT-drift, renholdstjenester osv.).
+
 Svar med et rent JSON-objekt — ingen annen tekst, ingen markdown-formatering, ingen forklaring utenfor JSON:
 
 {
@@ -58,10 +63,22 @@ Svar med et rent JSON-objekt — ingen annen tekst, ingen markdown-formatering, 
       "link": "https://doffin.no/notices/2026-XXXXXX"
     }
   ],
+  "maybeCards": [
+    {
+      "id": "2026-XXXXXX",
+      "title": "Tittel på anskaffelsen",
+      "buyer": "Oppdragsgiver",
+      "value": "beløp i NOK eller null",
+      "deadline": "DD.MM.ÅÅÅÅ eller null",
+      "relevance": "1-2 setninger om hva som kan gjøre dette relevant, og hva som er usikkert",
+      "link": "https://doffin.no/notices/2026-XXXXXX"
+    }
+  ],
   "summary": "2-3 setninger. Hvis ingen relevante: beskriv hva slags utlysninger som dominerte i dag."
 }
 
 Hvis ingen anskaffelser er relevante, returner cards som en tom liste: [].
+Hvis ingen anskaffelser er mulig relevante, returner maybeCards som en tom liste: [].
 Svar på norsk.
 `.trim();
 
@@ -84,19 +101,25 @@ export default async function handler() {
     const subject = `Doffin Scout – ${formatNorwegianDate(new Date())}`;
 
     if (notices.length === 0) {
-      const html = formatEmailHtml([], "", totalCount, [], yesterday);
+      const html = formatEmailHtml([], [], "", totalCount, [], yesterday);
       await sendEmail(subject, html);
       return;
     }
 
-    const { cards, summary } = await analyzeWithClaude(notices, yesterday);
-    console.log(`[doffin-scout] Relevante for SoCentral: ${cards.length}`);
+    const { cards, maybeCards, summary } = await analyzeWithClaude(
+      notices,
+      yesterday,
+    );
+    console.log(
+      `[doffin-scout] Relevante for SoCentral: ${cards.length}, mulig relevante: ${maybeCards.length}`,
+    );
 
-    const relevantIds = new Set(cards.map((c) => c.id));
-    const nonRelevant = notices.filter((n) => !relevantIds.has(n.id));
+    const categorizedIds = new Set([...cards, ...maybeCards].map((c) => c.id));
+    const nonRelevant = notices.filter((n) => !categorizedIds.has(n.id));
 
     const html = formatEmailHtml(
       cards,
+      maybeCards,
       summary,
       totalCount,
       nonRelevant,
@@ -266,9 +289,10 @@ async function analyzeWithClaude(notices, yesterday) {
   }
 
   const cards = Array.isArray(parsed.cards) ? parsed.cards : [];
+  const maybeCards = Array.isArray(parsed.maybeCards) ? parsed.maybeCards : [];
   const summary = typeof parsed.summary === "string" ? parsed.summary : "";
 
-  return { cards, summary };
+  return { cards, maybeCards, summary };
 }
 
 // ─── Epost via Resend ─────────────────────────────────────────────────────────
@@ -282,7 +306,7 @@ async function sendEmail(subject, html) {
     },
     body: JSON.stringify({
       from: process.env.EMAIL_FROM,
-      to: [process.env.EMAIL_TO],
+      to: process.env.EMAIL_TO.split(",").map((e) => e.trim()),
       subject,
       html,
     }),
@@ -298,6 +322,7 @@ async function sendEmail(subject, html) {
 
 function formatEmailHtml(
   cards,
+  maybeCards,
   summary,
   totalCount,
   nonRelevantNotices,
@@ -305,12 +330,11 @@ function formatEmailHtml(
 ) {
   const yesterdayFormatted = formatNorwegianDateFromString(yesterday);
   const relevantCount = cards.length;
+  const maybeCount = maybeCards.length;
 
-  const cardsHtml = cards
-    .map(
-      (card) => `
+  const renderCard = (card, borderColor) => `
     <table width="100%" cellpadding="0" cellspacing="0" border="0"
-      style="margin-bottom:14px;border:1px solid #e0e0e5;border-radius:10px;overflow:hidden">
+      style="margin-bottom:14px;border:1px solid ${borderColor};border-radius:10px;overflow:hidden">
       <tr>
         <td style="padding:14px 16px;font-family:Helvetica Neue,Helvetica,Arial,sans-serif">
           <p style="margin:0 0 2px;font-size:14px;font-weight:600;color:#1c1c1e;line-height:1.3">${escHtml(card.title)}</p>
@@ -321,8 +345,11 @@ function formatEmailHtml(
           ${card.link ? `<a href="${card.link}" style="font-size:13px;font-weight:500;color:#0066cc;text-decoration:none">Se utlysning på Doffin →</a>` : ""}
         </td>
       </tr>
-    </table>`,
-    )
+    </table>`;
+
+  const cardsHtml = cards.map((c) => renderCard(c, "#e0e0e5")).join("");
+  const maybeCardsHtml = maybeCards
+    .map((c) => renderCard(c, "#f0e0c0"))
     .join("");
 
   const nonRelevantHtml =
@@ -383,8 +410,10 @@ function formatEmailHtml(
                   Doffin hadde <strong style="color:#1c1c1e">${totalCount} nye utlysninger</strong> i går.
                   ${
                     relevantCount > 0
-                      ? `Claude identifiserte <strong style="color:#1c1c1e">${relevantCount} ${relevantCount === 1 ? "mulighet" : "muligheter"}</strong> som er relevante for SoCentral.`
-                      : "Ingen av dem ble vurdert som relevante for SoCentral."
+                      ? `Claude identifiserte <strong style="color:#1c1c1e">${relevantCount} ${relevantCount === 1 ? "mulighet" : "muligheter"}</strong> som er relevante for SoCentral${maybeCount > 0 ? `, og <strong style="color:#1c1c1e">${maybeCount}</strong> som kan være verdt å se nærmere på` : ""}.`
+                      : maybeCount > 0
+                        ? `Ingen klare treff, men <strong style="color:#1c1c1e">${maybeCount}</strong> utlysninger kan være verdt å se nærmere på.`
+                        : "Ingen av dem ble vurdert som relevante for SoCentral."
                   }
                 </p>
               </td>
@@ -400,6 +429,21 @@ function formatEmailHtml(
                   Relevante muligheter
                 </p>
                 ${cardsHtml}
+              </td>
+            </tr>`
+                : ""
+            }
+
+            ${
+              maybeCount > 0
+                ? `
+            <tr><td style="padding:20px 28px 0"><hr style="border:none;border-top:1px solid #e0e0e5;margin:0"></td></tr>
+            <tr>
+              <td style="padding:20px 28px 0;font-family:Helvetica Neue,Helvetica,Arial,sans-serif">
+                <p style="margin:0 0 16px;font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#b8860b">
+                  Kan være relevant (${maybeCount})
+                </p>
+                ${maybeCardsHtml}
               </td>
             </tr>`
                 : ""
