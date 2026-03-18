@@ -17,6 +17,7 @@ mellom offentlig, privat og frivillig sektor. Vi initierer og fasiliterer samarb
 tvers av sektorer rundt samfunnsutfordringer som klima, bolig, inkludering og demokrati.
 
 Vi tilbyr:
+- Prosjektutvikling og -ledelse av komplekse prosjekter som krever samarbeid mellom aktører
 - Fasilitering av folkepaneler og innbyggermedvirkning
 - Kunnskapsarenaer og læringsnettverk
 - Nabolagsutvikling og stedsutvikling
@@ -24,7 +25,7 @@ Vi tilbyr:
 - Kurs og kompetanseutvikling for samfunnsutviklere
 - Prosessdesign og prosjektledelse for tverrsektorielle initiativ
 
-Vi har 230+ medlemmer (samfunnsutviklere), 100+ partnere, og jobber typisk med
+Vi har 230+ medlemmer (samfunnsutviklere), 100+ medlemsvirksomheter, og jobber typisk med
 kommuner, statsforvaltere, stiftelser og større private aktører.
 `.trim();
 
