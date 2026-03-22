@@ -1,11 +1,11 @@
 /**
  * Netlify Scheduled Function: doffin-scout
- * Kjører daglig kl. 07:00 UTC (09:00 Oslo-tid)
- * Henter alle nye anskaffelser fra i går, analyserer relevante for SoCentral.
+ * Kjører mandager kl. 07:00 UTC (08:00 CET / 09:00 CEST)
+ * Henter alle nye anskaffelser fra forrige uke (man–søn), analyserer relevante for SoCentral.
  */
 
 export const config = {
-  schedule: "0 7 * * *",
+  schedule: "0 7 * * 1", // Mandager 07:00 UTC = 08:00 CET / 09:00 CEST
 };
 
 const DOFFIN_API_URL = "https://api.doffin.no/public/v2/search";
@@ -75,7 +75,7 @@ Svar med et rent JSON-objekt — ingen annen tekst, ingen markdown-formatering, 
       "link": "https://doffin.no/notices/2026-XXXXXX"
     }
   ],
-  "summary": "2-3 setninger. Hvis ingen relevante: beskriv hva slags utlysninger som dominerte i dag."
+  "summary": "2-3 setninger om hva slags utlysninger som dominerte denne dagen – temaer, sektorer, geografi. Skriv som om det inngår i et ukentlig overblikk."
 }
 
 Hvis ingen anskaffelser er relevante, returner cards som en tom liste: [].
@@ -86,80 +86,120 @@ Svar på norsk.
 // ─── Hovedfunksjon ────────────────────────────────────────────────────────────
 
 export default async function handler() {
-  console.log("[doffin-scout] Starter daglig kjøring...");
+  console.log("[doffin-scout] Starter ukentlig kjøring...");
 
   try {
-    const { apiDate, yesterday } = getDateRange();
+    const dates = getWeekDates();
+    const weekStart = dates[0];
+    const weekEnd = dates[dates.length - 1];
     console.log(
-      `[doffin-scout] Henter anskaffelser (API-dato: ${apiDate}, norsk dato: ${yesterday})`,
+      `[doffin-scout] Henter anskaffelser for perioden: ${weekStart} – ${weekEnd}`,
     );
 
-    const { totalCount, notices } = await fetchDoffinNotices(apiDate);
+    // Hent alle dager parallelt
+    const dayResults = await Promise.all(
+      dates.map((date) => fetchDoffinNotices(date)),
+    );
+    const totalCount = dayResults.reduce((sum, r) => sum + r.totalCount, 0);
     console.log(
-      `[doffin-scout] Totalt nye utlysninger i går: ${totalCount}, hentet: ${notices.length}`,
+      `[doffin-scout] Totalt nye utlysninger denne uken: ${totalCount}`,
     );
 
-    const subject = `Doffin Scout – ${formatNorwegianDate(new Date())}`;
+    const subject = `Doffin Scout – uke ${getISOWeekNumber(weekStart)}`;
 
-    if (notices.length === 0) {
-      const html = formatEmailHtml([], [], "", totalCount, [], yesterday);
+    if (totalCount === 0) {
+      const html = formatEmailHtml([], [], totalCount, weekStart, weekEnd);
       await sendEmail(subject, html);
       return;
     }
 
-    const { cards, maybeCards, summary } = await analyzeWithClaude(
-      notices,
-      yesterday,
-    );
+    // Analyser hver dag sekvensielt med pause for å holde seg under rate limit (10k tokens/min)
+    const analyses = [];
+    for (let i = 0; i < dayResults.length; i++) {
+      if (i > 0) await sleep(15000);
+      const result =
+        dayResults[i].notices.length > 0
+          ? await analyzeWithClaude(dayResults[i].notices, dates[i])
+          : { cards: [], maybeCards: [] };
+      analyses.push(result);
+    }
+
+    // Slå sammen og dedupliser på id, samle daglige sammendrag
+    const seenIds = new Set();
+    const cards = [];
+    const maybeCards = [];
+    const summaries = [];
+    for (const analysis of analyses) {
+      for (const card of analysis.cards) {
+        if (!seenIds.has(card.id)) {
+          seenIds.add(card.id);
+          cards.push(card);
+        }
+      }
+      for (const card of analysis.maybeCards) {
+        if (!seenIds.has(card.id)) {
+          seenIds.add(card.id);
+          maybeCards.push(card);
+        }
+      }
+      if (analysis.summary) summaries.push(analysis.summary);
+    }
+    const weeklySummary = summaries.length > 0
+      ? await synthesizeWeeklySummary(summaries)
+      : "";
     console.log(
       `[doffin-scout] Relevante for SoCentral: ${cards.length}, mulig relevante: ${maybeCards.length}`,
     );
 
-    const categorizedIds = new Set([...cards, ...maybeCards].map((c) => c.id));
-    const nonRelevant = notices.filter((n) => !categorizedIds.has(n.id));
-
     const html = formatEmailHtml(
       cards,
       maybeCards,
-      summary,
       totalCount,
-      nonRelevant,
-      yesterday,
+      weekStart,
+      weekEnd,
+      weeklySummary,
     );
     await sendEmail(subject, html);
-    console.log("[doffin-scout] Epost sendt");
+    console.log("[doffin-scout] Ukentlig epost sendt");
   } catch (err) {
     console.error("[doffin-scout] Feil:", err.message);
     await sendEmail(
       "Doffin Scout – feil ved kjøring",
-      `<p style="font-family:Helvetica,Arial,sans-serif;color:#1d1d1f">Det oppstod en feil under daglig kjøring:</p><pre style="font-family:monospace;font-size:13px;color:#e00">${err.message}</pre>`,
+      `<p style="font-family:Helvetica,Arial,sans-serif;color:#1d1d1f">Det oppstod en feil under ukentlig kjøring:</p><pre style="font-family:monospace;font-size:13px;color:#e00">${err.message}</pre>`,
     ).catch(() => {});
   }
 }
 
 // ─── Datoberegning ────────────────────────────────────────────────────────────
 
-function getDateRange() {
+// Returnerer de siste 7 dagene (mandag–søndag forrige uke) som ISO-datostrenger
+function getWeekDates() {
   const today = new Date();
-  const yesterday = new Date(today);
-  yesterday.setDate(yesterday.getDate() - 1);
-
-  const osloDate = new Intl.DateTimeFormat("sv-SE", {
-    timeZone: "Europe/Oslo",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(yesterday);
-
-  return { apiDate: osloDate, yesterday: osloDate };
+  const dates = [];
+  for (let daysAgo = 7; daysAgo >= 1; daysAgo--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - daysAgo);
+    dates.push(
+      new Intl.DateTimeFormat("sv-SE", {
+        timeZone: "Europe/Oslo",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(d),
+    );
+  }
+  return dates;
 }
 
-function formatNorwegianDate(date) {
-  return date.toLocaleDateString("nb-NO", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-  });
+function getISOWeekNumber(dateStr) {
+  const d = new Date(dateStr);
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() + 3 - ((d.getDay() + 6) % 7));
+  const week1 = new Date(d.getFullYear(), 0, 4);
+  return (
+    1 +
+    Math.round(((d - week1) / 86400000 - 3 + ((week1.getDay() + 6) % 7)) / 7)
+  );
 }
 
 function formatNorwegianDateFromString(dateStr) {
@@ -167,9 +207,11 @@ function formatNorwegianDateFromString(dateStr) {
   return d.toLocaleDateString("nb-NO", {
     day: "numeric",
     month: "long",
-    year: "numeric",
+
   });
 }
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // ─── Doffin API ───────────────────────────────────────────────────────────────
 
@@ -182,6 +224,8 @@ async function fetchDoffinNotices(apiDate) {
     issueDateTo: apiDate,
     sortBy: "PUBLICATION_DATE_DESC",
   });
+  params.append("location", "NO084");
+  params.append("location", "anyw");
 
   const res = await fetch(`${DOFFIN_API_URL}?${params}`, {
     headers: { "Ocp-Apim-Subscription-Key": process.env.DOFFIN_API_KEY },
@@ -296,6 +340,33 @@ async function analyzeWithClaude(notices, yesterday) {
   return { cards, maybeCards, summary };
 }
 
+// ─── Ukentlig sammendrag ──────────────────────────────────────────────────────
+
+async function synthesizeWeeklySummary(dailySummaries) {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": process.env.ANTHROPIC_API_KEY,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: 300,
+      messages: [
+        {
+          role: "user",
+          content: `Her er korte daglige oppsummeringer av anskaffelser publisert på Doffin forrige uke. Skriv ett sammenhengende avsnitt på 3–4 setninger som gir et helhetlig bilde av hva slags utlysninger som dominerte uken – temaer, sektorer og eventuelle mønstre. Ikke nevn datoer, dager eller at dette er daglige sammendrag. Svar på norsk med flytende prosa.\n\n${dailySummaries.join("\n\n")}`,
+        },
+      ],
+    }),
+  });
+
+  if (!res.ok) return dailySummaries.join(" ");
+  const data = await res.json();
+  return (data.content?.[0]?.text ?? "").trim();
+}
+
 // ─── Epost via Resend ─────────────────────────────────────────────────────────
 
 async function sendEmail(subject, html) {
@@ -321,162 +392,82 @@ async function sendEmail(subject, html) {
 
 // ─── HTML-formatering ─────────────────────────────────────────────────────────
 
-function formatEmailHtml(
-  cards,
-  maybeCards,
-  summary,
-  totalCount,
-  nonRelevantNotices,
-  yesterday,
-) {
-  const yesterdayFormatted = formatNorwegianDateFromString(yesterday);
+function formatEmailHtml(cards, maybeCards, totalCount, weekStart, weekEnd, weeklySummary = "") {
+  const weekStartFormatted = formatNorwegianDateFromString(weekStart);
+  const weekEndFormatted = formatNorwegianDateFromString(weekEnd);
+  const weekNum = getISOWeekNumber(weekStart);
   const relevantCount = cards.length;
   const maybeCount = maybeCards.length;
 
-  const renderCard = (card, borderColor) => `
-    <table width="100%" cellpadding="0" cellspacing="0" border="0"
-      style="margin-bottom:14px;border:1px solid ${borderColor};border-radius:10px;overflow:hidden">
-      <tr>
-        <td style="padding:14px 16px;font-family:Helvetica Neue,Helvetica,Arial,sans-serif">
-          <p style="margin:0 0 2px;font-size:14px;font-weight:600;color:#1c1c1e;line-height:1.3">${escHtml(card.title)}</p>
-          <p style="margin:0 0 10px;font-size:12px;color:#8e8e93">${escHtml(card.buyer)}</p>
-          ${card.value ? `<p style="margin:0 0 3px;font-size:12px;color:#3a3a3c">Estimert verdi: ${escHtml(card.value)}</p>` : ""}
-          ${card.deadline ? `<p style="margin:0 0 10px;font-size:12px;color:#3a3a3c">Søknadsfrist: ${escHtml(card.deadline)}</p>` : ""}
-          ${card.relevance ? `<p style="margin:10px 0;font-size:13px;line-height:1.5;color:#1c1c1e">${escHtml(card.relevance)}</p>` : ""}
-          ${card.link ? `<a href="${card.link}" style="font-size:13px;font-weight:500;color:#0066cc;text-decoration:none">Se utlysning på Doffin →</a>` : ""}
-        </td>
-      </tr>
-    </table>`;
+  const F = `-apple-system,'Helvetica Neue',Helvetica,Arial,sans-serif`;
+  const hr = `<hr class="c-rule" style="border:none;border-top:1px solid #d2d2d7;margin:0 0 28px">`;
+  const label = (t) => `<p style="margin:0 0 14px;font-family:${F};font-size:11px;font-weight:600;letter-spacing:0.09em;text-transform:uppercase;color:#6e6e73" class="c-meta">${t}</p>`;
 
-  const cardsHtml = cards.map((c) => renderCard(c, "#e0e0e5")).join("");
-  const maybeCardsHtml = maybeCards
-    .map((c) => renderCard(c, "#f0e0c0"))
-    .join("");
+  const renderNotice = (card) => `
+    <p style="margin:0 0 3px;font-family:${F};font-size:15px;font-weight:600;line-height:1.35;color:#1d1d1f" class="c-body">${escHtml(card.title)}</p>
+    <p style="margin:0 0 8px;font-family:${F};font-size:13px;color:#6e6e73" class="c-meta">${escHtml(card.buyer)}${card.value ? ` · ${escHtml(card.value)}` : ""}${card.deadline ? ` · Frist ${escHtml(card.deadline)}` : ""}</p>
+    ${card.relevance ? `<p style="margin:0 0 7px;font-family:${F};font-size:14px;line-height:1.65;color:#1d1d1f" class="c-body">${escHtml(card.relevance)}</p>` : ""}
+    <p style="margin:0 0 28px">${card.link ? `<a href="${card.link}" style="font-family:${F};font-size:13px;font-weight:500;color:#0066cc;text-decoration:none" class="c-link">Se utlysning →</a>` : ""}</p>`;
 
-  const nonRelevantHtml =
-    nonRelevantNotices.length > 0
-      ? `
-    <tr><td style="padding:20px 28px 0"><hr style="border:none;border-top:1px solid #e0e0e5;margin:0"></td></tr>
-    <tr>
-      <td style="padding:16px 28px 0;font-family:Helvetica Neue,Helvetica,Arial,sans-serif">
-        <p style="margin:0 0 12px;font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#8e8e93">
-          Øvrige utlysninger (${nonRelevantNotices.length})
-        </p>
-        ${nonRelevantNotices
-          .map(
-            (n) => `
-          <p style="margin:0 0 7px;font-size:13px;line-height:1.45;font-family:Helvetica Neue,Helvetica,Arial,sans-serif">
-            <a href="${n.doffinLink ?? "#"}" style="color:#0066cc;text-decoration:none;font-weight:500">${escHtml(n.heading ?? "Uten tittel")}</a>
-            <span style="color:#8e8e93"> — ${escHtml(n.buyer?.[0]?.name ?? "")}</span>
-          </p>`,
-          )
-          .join("")}
-      </td>
-    </tr>`
-      : "";
+  const lede = relevantCount > 0
+    ? `Claude identifiserte <strong>${relevantCount} ${relevantCount === 1 ? "mulighet" : "muligheter"}</strong> som er relevante for SoCentral${maybeCount > 0 ? `, og <strong>${maybeCount}</strong> som kan være verdt å se nærmere på` : ""}.`
+    : maybeCount > 0
+      ? `Ingen klare treff, men <strong>${maybeCount}</strong> utlysninger kan være verdt å se nærmere på.`
+      : "Ingen av dem ble vurdert som relevante for SoCentral.";
 
   return `<!DOCTYPE html>
-<html lang="no" xmlns="http://www.w3.org/1999/xhtml">
+<html lang="no">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="color-scheme" content="light">
+  <meta name="color-scheme" content="light dark">
   <meta name="x-apple-disable-message-reformatting">
   <title>Doffin Scout</title>
+  <style>
+    @media (prefers-color-scheme: dark) {
+      body        { background-color: #1c1c1e !important; color: #f5f5f7 !important; }
+      .c-body     { color: #f5f5f7 !important; }
+      .c-meta     { color: #98989d !important; }
+      .c-rule     { border-top-color: #38383a !important; }
+      .c-link     { color: #2997ff !important; }
+      .c-muted    { color: #636366 !important; }
+      .c-green    { color: #30d158 !important; }
+      .c-blue     { color: #2997ff !important; }
+    }
+  </style>
 </head>
-<body style="margin:0;padding:0;background-color:#f2f2f7;-webkit-font-smoothing:antialiased">
+<body style="margin:0;padding:40px 28px 52px;font-family:${F};font-size:15px;line-height:1.7;color:#1d1d1f;background:#ffffff;max-width:600px">
 
-  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f2f2f7;padding:32px 16px">
-    <tr>
-      <td align="center">
-        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px">
+  ${label(`Doffin Scout · Uke ${weekNum} · Oslo, Viken og ikke angitt region`)}
 
-          <!-- Subject line -->
-          <tr>
-            <td style="padding:0 4px 20px">
-              <p style="margin:0;font-family:Helvetica Neue,Helvetica,Arial,sans-serif;font-size:20px;font-weight:700;color:#1c1c1e;letter-spacing:-0.3px">
-                Nye anskaffelser – ${yesterdayFormatted}
-              </p>
-            </td>
-          </tr>
+  <p style="margin:0 0 32px;font-family:${F};font-size:28px;font-weight:700;letter-spacing:-0.5px;line-height:1.15;color:#1d1d1f" class="c-body">${weekStartFormatted} – ${weekEndFormatted}</p>
 
-          <!-- Main body card -->
-          <table width="100%" cellpadding="0" cellspacing="0" border="0"
-            style="background:#ffffff;border-radius:14px;overflow:hidden;border:1px solid #e0e0e5">
+  <p style="margin:0 0 32px;font-family:${F};font-size:15px;line-height:1.7;color:#1d1d1f" class="c-body">Doffin hadde <strong>${totalCount} nye utlysninger</strong> i Oslo og Viken samt utlysninger uten angitt region forrige uke. ${lede}</p>
 
-            <!-- Lede -->
-            <tr>
-              <td style="padding:24px 28px 0;font-family:Helvetica Neue,Helvetica,Arial,sans-serif">
-                <p style="margin:0;font-size:15px;line-height:1.55;color:#3a3a3c">
-                  Doffin hadde <strong style="color:#1c1c1e">${totalCount} nye utlysninger</strong> i går.
-                  ${
-                    relevantCount > 0
-                      ? `Claude identifiserte <strong style="color:#1c1c1e">${relevantCount} ${relevantCount === 1 ? "mulighet" : "muligheter"}</strong> som er relevante for SoCentral${maybeCount > 0 ? `, og <strong style="color:#1c1c1e">${maybeCount}</strong> som kan være verdt å se nærmere på` : ""}.`
-                      : maybeCount > 0
-                        ? `Ingen klare treff, men <strong style="color:#1c1c1e">${maybeCount}</strong> utlysninger kan være verdt å se nærmere på.`
-                        : "Ingen av dem ble vurdert som relevante for SoCentral."
-                  }
-                </p>
-              </td>
-            </tr>
+  ${weeklySummary ? `
+  ${hr}
+  <p style="margin:0 0 18px;font-family:${F};font-size:15px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#1d1d1f" class="c-body">Ukens bilde</p>
+  <p style="margin:0 0 32px;font-family:${F};font-size:15px;line-height:1.7;color:#1d1d1f" class="c-body">${escHtml(weeklySummary)}</p>
+  ` : ""}
 
-            ${
-              relevantCount > 0
-                ? `
-            <tr><td style="padding:20px 28px 0"><hr style="border:none;border-top:1px solid #e0e0e5;margin:0"></td></tr>
-            <tr>
-              <td style="padding:20px 28px 0;font-family:Helvetica Neue,Helvetica,Arial,sans-serif">
-                <p style="margin:0 0 16px;font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#8e8e93">
-                  Relevante muligheter
-                </p>
-                ${cardsHtml}
-              </td>
-            </tr>`
-                : ""
-            }
+  ${relevantCount > 0 ? `
+  ${hr}
+  <p style="margin:0 0 18px;font-family:${F};font-size:15px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#1a8f45" class="c-green">Relevante muligheter</p>
+  ${cards.map(renderNotice).join("")}
+  ` : ""}
 
-            ${
-              maybeCount > 0
-                ? `
-            <tr><td style="padding:20px 28px 0"><hr style="border:none;border-top:1px solid #e0e0e5;margin:0"></td></tr>
-            <tr>
-              <td style="padding:20px 28px 0;font-family:Helvetica Neue,Helvetica,Arial,sans-serif">
-                <p style="margin:0 0 16px;font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#b8860b">
-                  Kan være relevant (${maybeCount})
-                </p>
-                ${maybeCardsHtml}
-              </td>
-            </tr>`
-                : ""
-            }
+  ${maybeCount > 0 ? `
+  ${hr}
+  <p style="margin:0 0 18px;font-family:${F};font-size:15px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#0066cc" class="c-blue">Kan være relevant</p>
+  ${maybeCards.map(renderNotice).join("")}
+  ` : ""}
 
-            ${
-              summary
-                ? `
-            <tr>
-              <td style="padding:16px 28px 0;font-family:Helvetica Neue,Helvetica,Arial,sans-serif">
-                <p style="margin:0;padding:12px 14px;background:#f2f2f7;border-radius:8px;font-size:13px;line-height:1.6;color:#3a3a3c">${escHtml(summary)}</p>
-              </td>
-            </tr>`
-                : ""
-            }
+  ${hr}
+  <p style="margin:0 0 18px;font-family:${F};font-size:15px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#1d1d1f" class="c-body">Se alle utlysninger i perioden</p>
+  <p style="margin:0 0 6px"><a href="https://doffin.no/search?page=1&amp;location=NO084%2Canyw&amp;fromDate=${weekStart}&amp;toDate=${weekEnd}&amp;status=ACTIVE" style="font-family:${F};font-size:14px;color:#0066cc;text-decoration:none" class="c-link">Oslo og Viken + ikke angitt region →</a></p>
+  <p style="margin:0 0 40px"><a href="https://doffin.no/search?page=1&amp;fromDate=${weekStart}&amp;toDate=${weekEnd}&amp;status=ACTIVE" style="font-family:${F};font-size:14px;color:#0066cc;text-decoration:none" class="c-link">Alle regioner →</a></p>
 
-            ${nonRelevantHtml}
-
-            <!-- Footer -->
-            <tr><td style="padding:24px 28px">
-              <p style="margin:0;font-family:Helvetica Neue,Helvetica,Arial,sans-serif;font-size:11px;color:#aeaeb2">
-                Generert av Doffin Scout · SoCentral AS ·
-                <a href="https://doffin.no" style="color:#aeaeb2;text-decoration:none">doffin.no</a>
-              </p>
-            </td></tr>
-
-          </table>
-
-        </table>
-      </td>
-    </tr>
-  </table>
+  <p style="margin:0;font-family:${F};font-size:11px;color:#aeaeb2" class="c-muted">Generert av Doffin Scout · SoCentral AS · <a href="https://doffin.no" style="color:#aeaeb2;text-decoration:none">doffin.no</a></p>
 
 </body>
 </html>`;

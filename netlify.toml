@@ -5,6 +5,9 @@
 [functions]
   node_bundler = "esbuild"
 
+[functions."doffin-scout"]
+  timeout = 900  # 15 minutter – nødvendig for 7 sekvensielle Claude-kall
+
 [dev]
   port       = 8888          # Netlify dev UI på http://localhost:8888
   autoLaunch = false         # Åpne ikke nettleser automatisk
