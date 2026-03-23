@@ -116,7 +116,7 @@ export default async function handler() {
     // Analyser hver dag sekvensielt med pause for å holde seg under rate limit (10k tokens/min)
     const analyses = [];
     for (let i = 0; i < dayResults.length; i++) {
-      if (i > 0) await sleep(15000);
+      if (i > 0) await sleep(65000);
       const result =
         dayResults[i].notices.length > 0
           ? await analyzeWithClaude(dayResults[i].notices, dates[i])
@@ -250,6 +250,29 @@ async function fetchDoffinNotices(apiDate) {
 
 // ─── Claude API ───────────────────────────────────────────────────────────────
 
+async function fetchClaude(body, retries = 3) {
+  for (let attempt = 0; attempt < retries; attempt++) {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": process.env.ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (res.status === 429 && attempt < retries - 1) {
+      const waitMs = 60000 * (attempt + 1);
+      console.log(`[doffin-scout] 429 rate limit – venter ${waitMs / 1000}s før nytt forsøk (${attempt + 1}/${retries - 1})...`);
+      await sleep(waitMs);
+      continue;
+    }
+
+    return res;
+  }
+}
+
 async function analyzeWithClaude(notices, yesterday) {
   const noticesSummary = notices
     .map((n, i) => {
@@ -259,11 +282,6 @@ async function analyzeWithClaude(notices, yesterday) {
         ? `${Number(n.estimatedValue.amount).toLocaleString("nb-NO")} ${n.estimatedValue.currencyCode ?? "NOK"}`
         : "Ikke oppgitt";
       const description = (n.description ?? "").slice(0, 1000);
-      const lotsText = (n.lots ?? [])
-        .map((l) => l.description ?? "")
-        .filter(Boolean)
-        .join(" ")
-        .slice(0, 500);
       const deadline = n.deadline
         ? `Frist: ${new Date(n.deadline).toLocaleDateString("nb-NO")}`
         : "";
@@ -277,7 +295,6 @@ async function analyzeWithClaude(notices, yesterday) {
         deadline,
         `Lenke: ${n.doffinLink}`,
         description ? `Beskrivelse: ${description}` : "",
-        lotsText ? `Delkontrakter: ${lotsText}` : "",
       ]
         .filter(Boolean)
         .join("\n");
@@ -286,19 +303,11 @@ async function analyzeWithClaude(notices, yesterday) {
 
   const userMessage = `Her er anskaffelser publisert på Doffin ${yesterday}:\n\n${noticesSummary}`;
 
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": process.env.ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-6",
-      max_tokens: 2500,
-      system: CLAUDE_SYSTEM_PROMPT,
-      messages: [{ role: "user", content: userMessage }],
-    }),
+  const res = await fetchClaude({
+    model: "claude-sonnet-4-6",
+    max_tokens: 2500,
+    system: CLAUDE_SYSTEM_PROMPT,
+    messages: [{ role: "user", content: userMessage }],
   });
 
   if (!res.ok) {
@@ -343,23 +352,15 @@ async function analyzeWithClaude(notices, yesterday) {
 // ─── Ukentlig sammendrag ──────────────────────────────────────────────────────
 
 async function synthesizeWeeklySummary(dailySummaries) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": process.env.ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-6",
-      max_tokens: 300,
-      messages: [
-        {
-          role: "user",
-          content: `Her er korte daglige oppsummeringer av anskaffelser publisert på Doffin forrige uke. Skriv ett sammenhengende avsnitt på 3–4 setninger som gir et helhetlig bilde av hva slags utlysninger som dominerte uken – temaer, sektorer og eventuelle mønstre. Ikke nevn datoer, dager eller at dette er daglige sammendrag. Svar på norsk med flytende prosa.\n\n${dailySummaries.join("\n\n")}`,
-        },
-      ],
-    }),
+  const res = await fetchClaude({
+    model: "claude-sonnet-4-6",
+    max_tokens: 300,
+    messages: [
+      {
+        role: "user",
+        content: `Her er korte daglige oppsummeringer av anskaffelser publisert på Doffin forrige uke. Skriv ett sammenhengende avsnitt på 3–4 setninger som gir et helhetlig bilde av hva slags utlysninger som dominerte uken – temaer, sektorer og eventuelle mønstre. Ikke nevn datoer, dager eller at dette er daglige sammendrag. Svar på norsk med flytende prosa.\n\n${dailySummaries.join("\n\n")}`,
+      },
+    ],
   });
 
   if (!res.ok) return dailySummaries.join(" ");
