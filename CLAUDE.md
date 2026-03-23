@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this project does
 
 Doffin Scout is a Netlify scheduled function that runs every Monday at 07:00 UTC (08:00 CET / 09:00 CEST). It:
-1. Fetches active public procurements from the Doffin API for the previous 7 days (Mon–Sun), filtered to Oslo og Viken (`NO084`) and notices without a specified region (`anyw`)
+1. Fetches active public procurements from the Doffin API for the previous 7 days (Mon–Sun), filtered to Oslo og Viken (`NO08`) and notices without a specified region (`anyw`)
 2. Analyzes each day sequentially with Claude to categorize opportunities for SoCentral AS
 3. Synthesizes the daily summaries into a single weekly overview paragraph
 4. Sends a formatted plain-text-style HTML email digest via Resend
@@ -35,7 +35,7 @@ Sections (separated by comment banners):
 - **`handler()`** – orchestrates: get 7 dates → fetch all days in parallel → analyze each day sequentially → synthesize weekly summary → email.
 - **`getWeekDates()`** – returns an array of 7 ISO date strings for Mon–Sun of last week (Oslo timezone).
 - **`getISOWeekNumber()`** – returns the ISO week number for a date string.
-- **`fetchDoffinNotices(date)`** – calls `https://api.doffin.no/public/v2/search` with `location=NO084&location=anyw` and a single date. Uses the `Ocp-Apim-Subscription-Key` header.
+- **`fetchDoffinNotices(date)`** – calls `https://api.doffin.no/public/v2/search` with `location=NO08&location=anyw` and a single date. Uses the `Ocp-Apim-Subscription-Key` header.
 - **`analyzeWithClaude(notices, date)`** – calls the Anthropic Messages API directly via `fetch` (no SDK). Uses `claude-sonnet-4-6`, `max_tokens: 2500`. Returns `{ cards, maybeCards, summary }`.
 - **`synthesizeWeeklySummary(dailySummaries)`** – makes a single small Claude call to combine 7 daily summaries into one coherent weekly overview paragraph (`max_tokens: 300`).
 - **`sendEmail(subject, html)`** – calls the Resend API. Recipients are read from `EMAIL_TO` (comma-separated).
@@ -43,7 +43,7 @@ Sections (separated by comment banners):
 
 ### Rate limiting
 
-Claude calls are made sequentially with a 15-second sleep between each day to stay within the 10,000 input tokens/minute rate limit. The function timeout is set to 900 seconds in `netlify.toml`.
+Claude calls are made sequentially with a 65-second sleep between each day to stay within the 10,000 input tokens/minute rate limit. On 429 errors the function retries up to 3 times with exponential backoff (60s, 120s, 180s). The function timeout is set to 900 seconds in `netlify.toml`.
 
 ### Analysis categories
 
@@ -70,13 +70,13 @@ Claude sorts each procurement into one of three categories:
 
 - Endpoint: `https://api.doffin.no/public/v2/search`
 - Auth header: `Ocp-Apim-Subscription-Key`
-- Location filter: `params.append("location", "NO084")` / `params.append("location", "anyw")` — use `append()` for repeated keys
-- Key params: `issueDateFrom`, `issueDateTo`, `status=ACTIVE`, `numHitsPerPage`, `sortBy`
+- Location filter: `params.append("location", "NO08")` / `params.append("location", "anyw")` — use `append()` for repeated keys
+- Key params: `issueDateFrom`, `issueDateTo`, `status=ACTIVE`, `numHitsPerPage` (set to 200), `sortBy`
 
 ### Doffin web search URL format
 
 ```
-https://doffin.no/search?page=1&location=NO084%2Canyw&fromDate=YYYY-MM-DD&toDate=YYYY-MM-DD&status=ACTIVE
+https://doffin.no/search?page=1&location=NO08%2Canyw&fromDate=YYYY-MM-DD&toDate=YYYY-MM-DD&status=ACTIVE
 ```
 
 ### Required environment variables
@@ -98,8 +98,8 @@ https://doffin.no/search?page=1&location=NO084%2Canyw&fromDate=YYYY-MM-DD&toDate
 
 ## Customization points
 
-- **Region filter**: `location` params in `fetchDoffinNotices()` — `NO084` = Oslo og Viken, `anyw` = not specified
+- **Region filter**: `location` params in `fetchDoffinNotices()` — `NO08` = Oslo og Viken (NUTS2 region), `anyw` = not specified
 - **Relevance criteria**: `SOCENTRAL_CONTEXT` and `CLAUDE_SYSTEM_PROMPT`
 - **Schedule**: `export const config` cron string
 - **Recipients**: `EMAIL_TO` env var (comma-separated)
-- **Rate limit delay**: `sleep(15000)` between Claude calls in `handler()`
+- **Rate limit delay**: `sleep(65000)` between Claude calls in `handler()`

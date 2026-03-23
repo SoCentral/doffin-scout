@@ -1,12 +1,12 @@
 # Doffin Scout
 
-Ukentlig Doffin-scanner for SoCentral. Kjører mandager kl. 08:00 Oslo-tid (07:00 UTC), henter aktive offentlige anskaffelser fra Oslo og Viken samt utlysninger uten angitt region for hele forrige uke, analyserer dem med Claude og sender en e-postdigest til mottakerlisten.
+Ukentlig Doffin-scanner for SoCentral. Kjører mandager kl. 08:00 Oslo-tid (07:00 UTC), henter aktive offentlige anskaffelser fra Oslo og Viken (`NO08`) samt utlysninger uten angitt region (`anyw`) for hele forrige uke, analyserer dem med Claude og sender en e-postdigest til mottakerlisten.
 
 ## Miljøvariabler
 
 | Variabel | Beskrivelse |
 |---|---|
-| `DOFFIN_API_KEY` | Doffin Beta API subscription key |
+| `DOFFIN_API_KEY` | Doffin API subscription key |
 | `ANTHROPIC_API_KEY` | Anthropic API-nøkkel |
 | `RESEND_API_KEY` | Resend.com API-nøkkel |
 | `EMAIL_FROM` | Avsenderadresse (må være verifisert i Resend) |
@@ -22,7 +22,16 @@ netlify dev        # start lokal dev-server
 netlify functions:invoke doffin-scout --no-identity
 ```
 
-Funksjonen tar ~2 minutter å kjøre lokalt (7 sekvensielle Claude-kall med pause mellom for å overholde rate limit).
+Funksjonen tar ~8 minutter å kjøre (7 sekvensielle Claude-kall med 65 sekunders pause mellom for å overholde rate limit). Ved 429-feil fra Claude API forsøker den automatisk på nytt opptil 3 ganger med eksponentiell backoff.
+
+## Feilsøking
+
+```bash
+# Sjekk hvilke utlysninger som hentes for en gitt periode
+node debug.mjs 2026-03-16 2026-03-22
+```
+
+`debug.mjs` bruker samme parametere som produksjonsfunksjonen (NO08 + anyw, 200 per dag) og lister alle utlysninger med tittel, oppdragsgiver og lenke.
 
 ## Forhåndsvisning av e-post
 
@@ -36,20 +45,21 @@ Koble GitHub-repoet til Netlify. Funksjonen plukkes opp automatisk via `netlify.
 
 | Hva | Hvor |
 |---|---|
-| Regionsfilter (Doffin API) | `location`-parametere i `fetchDoffinNotices()` |
+| Regionsfilter | `location`-parametere i `fetchDoffinNotices()` — `NO08` = Oslo og Viken (NUTS2), `anyw` = ikke angitt region |
 | Relevanskriterier og SoCentral-beskrivelse | `SOCENTRAL_CONTEXT` + `CLAUDE_SYSTEM_PROMPT` |
 | Tidspunkt | cron-uttrykket i `export const config` |
 | Mottakere | `EMAIL_TO` i `.env` / Netlify-miljøvariabler |
 
 ## Kostnadsestimat
 
-~$0.10–0.20/uke (Claude Sonnet 4.6, 7 kall à ~30–50 utlysninger + 1 syntesekall for ukessammendrag). Doffin API, Resend og Netlify Functions er gratis på dette volumet.
+~$0.25–0.35/uke (Claude Sonnet 4.6, 7 daglige analysekall + 1 syntesekall). Doffin API, Resend og Netlify Functions er gratis på dette volumet.
 
 ## Filstruktur
 
 ```
 doffin-scout/
 ├── netlify/functions/doffin-scout.mjs   # Hele funksjonen
+├── debug.mjs                             # Feilsøkingsscript for API-kall
 ├── preview.html                          # Statisk e-postforhåndsvisning
 ├── netlify.toml
 ├── package.json

@@ -1,16 +1,17 @@
 /**
- * debug-notices.mjs
- * Henter alle utlysninger fra i går + full detalj via download-endepunktet.
- * Outputter alt til console. Sender ikke til Claude eller epost.
+ * debug.mjs
+ * Henter utlysninger med produksjonsparametere (NO08 + anyw, 200 per dag)
+ * og lister antall og titler.
  *
- * Kjør: node scripts/debug-notices.mjs
+ * Kjør: node debug.mjs
+ * Kjør: node debug.mjs 2026-03-16 2026-03-22   (egendefinert periode)
  * Krever: .env-fil med DOFFIN_API_KEY
  */
 
 import { readFileSync } from "fs";
 import { resolve } from "path";
 
-// Last .env manuelt (unngår avhengighet av dotenv-pakke)
+// Last .env manuelt
 try {
   const env = readFileSync(resolve(process.cwd(), ".env"), "utf8");
   for (const line of env.split("\n")) {
@@ -29,178 +30,89 @@ if (!API_KEY) {
 }
 
 const SEARCH_URL = "https://api.doffin.no/public/v2/search";
-const DOWNLOAD_URL = "https://api.doffin.no/public/v2/download";
 
 // ─── Datoberegning ────────────────────────────────────────────────────────────
 
-function getYesterday() {
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  // Bruk norsk tidssone
-  return new Intl.DateTimeFormat("sv-SE", {
-    timeZone: "Europe/Oslo",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(yesterday);
+function getLastWeekDates() {
+  const today = new Date();
+  const fmt = (d) =>
+    new Intl.DateTimeFormat("sv-SE", {
+      timeZone: "Europe/Oslo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(d);
+
+  const sun = new Date(today);
+  sun.setDate(today.getDate() - 1);
+
+  const mon = new Date(sun);
+  mon.setDate(sun.getDate() - 6);
+
+  return { from: fmt(mon), to: fmt(sun) };
 }
 
-// Prod-API bruker norsk dato direkte — ingen offset
-const norwegianDate = process.argv[2] ?? getYesterday();
-const apiDate = norwegianDate; // Samme dato, ingen manipulering
-console.log(`\n${"=".repeat(60)}`);
-console.log(
-  `Doffin Debug – norsk dato: ${norwegianDate} (API-dato: ${apiDate})`,
-);
-console.log("=".repeat(60));
+const fromDate = process.argv[2] ?? getLastWeekDates().from;
+const toDate = process.argv[3] ?? getLastWeekDates().to;
 
-// ─── Søk ──────────────────────────────────────────────────────────────────────
+// ─── Søkefunksjon ─────────────────────────────────────────────────────────────
 
 async function search() {
-  console.log(
-    `\n⏳ Henter utlysninger (issueDateFrom=${apiDate}, tilsvarer norsk dato ${norwegianDate})...`,
-  );
-
   const params = new URLSearchParams({
-    numHitsPerPage: "100",
+    numHitsPerPage: "200",
     page: "1",
     status: "ACTIVE",
-    issueDateFrom: apiDate,
-    issueDateTo: apiDate,
+    issueDateFrom: fromDate,
+    issueDateTo: toDate,
     sortBy: "PUBLICATION_DATE_DESC",
   });
+  params.append("location", "NO08");
+  params.append("location", "anyw");
 
-  const res = await fetch(`${SEARCH_URL}?${params}`, {
-    headers: { "Ocp-Apim-Subscription-Key": API_KEY },
-  });
-  if (!res.ok) throw new Error(`Søk feilet: ${res.status} ${res.statusText}`);
-  const data = await res.json();
-
-  console.log(`✅ Totalt ${data.numHitsTotal ?? 0} utlysninger`);
-  return data;
-}
-
-// ─── Download ─────────────────────────────────────────────────────────────────
-
-async function download(id) {
-  const res = await fetch(`${DOWNLOAD_URL}/${id}`, {
+  const url = `${SEARCH_URL}?${params}`;
+  const res = await fetch(url, {
     headers: { "Ocp-Apim-Subscription-Key": API_KEY },
   });
 
-  if (!res.ok) return { _error: `${res.status} ${res.statusText}` };
-
-  const contentType = res.headers.get("content-type") ?? "";
-  const text = await res.text();
-
-  if (contentType.includes("json")) {
-    try {
-      return JSON.parse(text);
-    } catch {
-      return { _raw: text.slice(0, 2000) };
-    }
-  }
-
-  // XML – returner råtekst for å inspisere strukturen
-  return { _xml: text };
+  const bodyText = await res.text();
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${bodyText.slice(0, 300)}`);
+  return { data: JSON.parse(bodyText), url };
 }
 
 // ─── Hovedlogikk ──────────────────────────────────────────────────────────────
 
 async function main() {
-  // 1. Søk
-  console.log("\n⏳ Henter søkeresultater...");
-  const searchData = await search();
-  const hits = searchData.hits ?? [];
-  const total = searchData.numHitsTotal ?? hits.length;
+  console.log(`\n${"=".repeat(70)}`);
+  console.log(`Doffin Scout – ${fromDate} → ${toDate}`);
+  console.log(`Lokasjon: NO08 + anyw | Status: ACTIVE | numHitsPerPage: 200`);
+  console.log("=".repeat(70));
 
-  console.log(`✅ Fant ${total} utlysninger (${hits.length} returnert)\n`);
+  const { data, url } = await search();
+  const total = data.numHitsTotal ?? 0;
+  const hits = data.hits ?? [];
+
+  console.log(`\nURL: ${url}`);
+  console.log(`\nnumHitsTotal: ${total}   returnert: ${hits.length}\n`);
 
   if (hits.length === 0) {
-    console.log("Ingen utlysninger å vise.");
+    console.log("Ingen utlysninger funnet.");
     return;
   }
 
-  // 2. Download + print per utlysning
-  for (let i = 0; i < hits.length; i++) {
-    const hit = hits[i];
-    const prefix = `[${i + 1}/${hits.length}]`;
+  console.log("─".repeat(70));
+  hits.forEach((h, i) => {
+    const buyer = h.buyer?.[0]?.name ?? "Ukjent";
+    const date = h.issueDate ?? h.publicationDate ?? "—";
+    console.log(`${String(i + 1).padStart(3)}. [${date}] ${h.heading ?? "Uten tittel"}`);
+    console.log(`      ${buyer} · https://doffin.no/notices/${h.id}`);
+  });
 
-    console.log(`\n${"─".repeat(60)}`);
-    console.log(`${prefix} ID: ${hit.id ?? "ukjent"}`);
-    console.log(`${"─".repeat(60)}`);
-
-    console.log(`TITTEL:         ${hit.heading ?? "—"}`);
-    console.log(
-      `OPPDRAGSGIVER:  ${hit.buyer?.map((b) => b.name).join(", ") ?? "—"}`,
-    );
-    console.log(`TYPE:           ${hit.type ?? "—"}`);
-    console.log(
-      `PUBLISERT:      ${hit.publicationDate ?? hit.issueDate ?? "—"}`,
-    );
-    console.log(`FRIST:          ${hit.deadline ?? "ikke angitt"}`);
-    console.log(
-      `ESTIMERT VERDI: ${
-        hit.estimatedValue?.amount
-          ? `${Number(hit.estimatedValue.amount).toLocaleString("nb-NO")} ${hit.estimatedValue.currencyCode ?? "NOK"}`
-          : "ikke angitt"
-      }`,
-    );
-    console.log(`CPV-KODER:      ${hit.cpvCodes?.join(", ") ?? "—"}`);
-    console.log(`LOKASJONER:     ${hit.locationId?.join(", ") ?? "—"}`);
-    console.log(`BESKRIVELSE:    ${hit.description ?? "INGEN"}`);
-
-    if (hit.lots?.length > 0) {
-      console.log(`LOTS (${hit.lots.length}):`);
-      hit.lots.forEach((lot, j) => {
-        console.log(`  [Lot ${j + 1}] ${lot.heading ?? "—"}`);
-        console.log(`          ${lot.description ?? "ingen beskrivelse"}`);
-      });
-    }
-
-    console.log(`LENKE:          https://doffin.no/notices/${hit.id}`);
-
-    // Hent fullstendig innhold via download
-    process.stdout.write(`  ⏳ Henter fullstendig innhold...`);
-    const detail = await download(hit.id);
-    process.stdout.write(` ferdig\n`);
-
-    if (detail._error) {
-      console.log(`  ⚠️  Download feilet: ${detail._error}`);
-    } else if (detail._xml) {
-      // Trekk ut all tekst mellom XML-tagger som inneholder beskrivelse
-      const textMatches = [
-        ...detail._xml.matchAll(
-          /<cbc:Description[^>]*>([\s\S]*?)<\/cbc:Description>/g,
-        ),
-        ...detail._xml.matchAll(/<cbc:Name[^>]*>([\s\S]*?)<\/cbc:Name>/g),
-        ...detail._xml.matchAll(/<cbc:Note[^>]*>([\s\S]*?)<\/cbc:Note>/g),
-      ]
-        .map((m) => m[1].trim())
-        .filter((t) => t.length > 20);
-
-      if (textMatches.length > 0) {
-        console.log(`  FULL TEKST FRA XML:`);
-        textMatches.forEach((t, i) => console.log(`    [${i + 1}] ${t}`));
-      } else {
-        // Ingen kjente tagger funnet – vis rå XML (første 2000 tegn)
-        console.log(`  RAW XML (første 2000 tegn):`);
-        console.log(
-          detail._xml
-            .slice(0, 2000)
-            .split("\n")
-            .map((l) => `    ${l}`)
-            .join("\n"),
-        );
-      }
-    }
-  }
-
-  console.log(`\n${"=".repeat(60)}`);
-  console.log(`Ferdig – ${hits.length} utlysninger vist`);
-  console.log("=".repeat(60));
+  console.log(`\n${"=".repeat(70)}`);
+  console.log(`Totalt: ${hits.length} utlysninger vist (${total} totalt)`);
+  console.log("=".repeat(70));
 }
 
 main().catch((err) => {
-  console.error("\n❌ Feil:", err.message);
+  console.error("\nFeil:", err.message);
   process.exit(1);
 });

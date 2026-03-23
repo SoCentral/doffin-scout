@@ -217,14 +217,14 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function fetchDoffinNotices(apiDate) {
   const params = new URLSearchParams({
-    numHitsPerPage: "100",
+    numHitsPerPage: "200",
     page: "1",
     status: "ACTIVE",
     issueDateFrom: apiDate,
     issueDateTo: apiDate,
     sortBy: "PUBLICATION_DATE_DESC",
   });
-  params.append("location", "NO084");
+  params.append("location", "NO08");
   params.append("location", "anyw");
 
   const res = await fetch(`${DOFFIN_API_URL}?${params}`, {
@@ -465,7 +465,7 @@ function formatEmailHtml(cards, maybeCards, totalCount, weekStart, weekEnd, week
 
   ${hr}
   <p style="margin:0 0 18px;font-family:${F};font-size:15px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#1d1d1f" class="c-body">Se alle utlysninger i perioden</p>
-  <p style="margin:0 0 6px"><a href="https://doffin.no/search?page=1&amp;location=NO084%2Canyw&amp;fromDate=${weekStart}&amp;toDate=${weekEnd}&amp;status=ACTIVE" style="font-family:${F};font-size:14px;color:#0066cc;text-decoration:none" class="c-link">Oslo og Viken + ikke angitt region →</a></p>
+  <p style="margin:0 0 6px"><a href="https://doffin.no/search?page=1&amp;location=NO08%2Canyw&amp;fromDate=${weekStart}&amp;toDate=${weekEnd}&amp;status=ACTIVE" style="font-family:${F};font-size:14px;color:#0066cc;text-decoration:none" class="c-link">Oslo og Viken + ikke angitt region →</a></p>
   <p style="margin:0 0 40px"><a href="https://doffin.no/search?page=1&amp;fromDate=${weekStart}&amp;toDate=${weekEnd}&amp;status=ACTIVE" style="font-family:${F};font-size:14px;color:#0066cc;text-decoration:none" class="c-link">Alle regioner →</a></p>
 
   <p style="margin:0;font-family:${F};font-size:11px;color:#aeaeb2" class="c-muted">Generert av Doffin Scout · SoCentral AS · <a href="https://doffin.no" style="color:#aeaeb2;text-decoration:none">doffin.no</a></p>
