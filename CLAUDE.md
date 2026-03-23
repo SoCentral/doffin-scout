@@ -16,12 +16,14 @@ Doffin Scout is a Netlify scheduled function that runs every Monday at 07:00 UTC
 # Install dev dependencies (Netlify CLI)
 npm install
 
-# Run locally (requires .env with all five env vars)
-netlify functions:invoke doffin-scout --no-identity
+# Run manually (requires .env with all five env vars) — ~8 minutes
+node run.mjs
 
 # Preview email design
 open preview.html
 ```
+
+> **Do not use** `netlify functions:invoke` for manual runs — it has a 30-second timeout that will abort the function. Use `node run.mjs` instead. The Netlify cron job runs as a background function and is not affected by this limitation.
 
 ## Architecture
 

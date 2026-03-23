@@ -18,11 +18,14 @@ Kopier `.env.example` til `.env` og fyll inn verdiene for lokal kjøring.
 
 ```bash
 npm install
-netlify dev        # start lokal dev-server
-netlify functions:invoke doffin-scout --no-identity
+
+# Manuell kjøring (anbefalt – ingen timeout)
+node run.mjs
 ```
 
 Funksjonen tar ~8 minutter å kjøre (7 sekvensielle Claude-kall med 65 sekunders pause mellom for å overholde rate limit). Ved 429-feil fra Claude API forsøker den automatisk på nytt opptil 3 ganger med eksponentiell backoff.
+
+> **Ikke bruk** `netlify functions:invoke` for manuell kjøring – det har en 30-sekunders timeout som avbryter funksjonen. Bruk `node run.mjs` i stedet. Cron-jobben på Netlify kjøres som background function og er ikke påvirket av denne begrensningen.
 
 ## Feilsøking
 
@@ -59,6 +62,7 @@ Koble GitHub-repoet til Netlify. Funksjonen plukkes opp automatisk via `netlify.
 ```
 doffin-scout/
 ├── netlify/functions/doffin-scout.mjs   # Hele funksjonen
+├── run.mjs                               # Manuell kjøring uten Netlify-timeout
 ├── debug.mjs                             # Feilsøkingsscript for API-kall
 ├── preview.html                          # Statisk e-postforhåndsvisning
 ├── netlify.toml
