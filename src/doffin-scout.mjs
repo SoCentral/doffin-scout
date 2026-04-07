@@ -380,7 +380,7 @@ function formatEmailHtml(cards, maybeCards, totalCount, weekStart, weekEnd, week
 
   const renderNotice = (card) => `
     <p style="margin:0 0 3px;font-family:${F};font-size:15px;font-weight:600;line-height:1.35;color:#1d1d1f" class="c-body">${escHtml(card.title)}</p>
-    <p style="margin:0 0 8px;font-family:${F};font-size:13px;color:#6e6e73" class="c-meta">${escHtml(card.buyer)}${card.value ? ` · ${escHtml(card.value)}` : ""}${card.deadline ? ` · Frist ${escHtml(card.deadline)}` : ""}</p>
+    <p style="margin:0 0 8px;font-family:${F};font-size:13px;color:#6e6e73" class="c-meta">${escHtml(card.buyer)}${card.value ? ` · ${escHtml(formatAmount(card.value))}` : ""}${card.deadline ? ` · Frist ${escHtml(card.deadline)}` : ""}</p>
     ${card.relevance ? `<p style="margin:0 0 7px;font-family:${F};font-size:14px;line-height:1.65;color:#1d1d1f" class="c-body">${escHtml(card.relevance)}</p>` : ""}
     <p style="margin:0 0 28px">${card.link ? `<a href="${card.link}" style="font-family:${F};font-size:13px;font-weight:500;color:#0066cc;text-decoration:none" class="c-link">Se utlysning →</a>` : ""}</p>`;
 
@@ -455,6 +455,16 @@ function formatEmailHtml(cards, maybeCards, totalCount, weekStart, weekEnd, week
 
 </body>
 </html>`;
+}
+
+// Formaterer beløp med mellomrom som tusenskille (f.eks. 100000000 → 100 000 000 NOK)
+function formatAmount(val) {
+  if (!val) return val;
+  const match = String(val).match(/^(\d+)(\s*\S*)?$/);
+  if (match) {
+    return Number(match[1]).toLocaleString("nb-NO") + (match[2] ?? "");
+  }
+  return val;
 }
 
 // Enkel HTML-escaping for å unngå XSS fra API-data
