@@ -16,5 +16,5 @@ try {
   // Ingen .env-fil – antar at miljøvariabler er satt eksternt (f.eks. GitHub Actions)
 }
 
-const { default: handler } = await import("./netlify/functions/doffin-scout.mjs");
+const { default: handler } = await import("./src/doffin-scout.mjs");
 await handler();

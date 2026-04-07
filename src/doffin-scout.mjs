@@ -92,7 +92,7 @@ export default async function handler() {
     const weekStart = dates[0];
     const weekEnd = dates[dates.length - 1];
     console.log(
-      `[doffin-scout] Henter anskaffelser for perioden: ${weekStart} – ${weekEnd}`,
+      `[doffin-scout] Henter anskaffelser for perioden: ${weekStart} - ${weekEnd}`,
     );
 
     // Hent alle dager parallelt
@@ -114,14 +114,21 @@ export default async function handler() {
 
     // Analyser alle utlysninger i ett Claude-kall (unngår lange søvnpauser mellom dager)
     const allNotices = dayResults.flatMap((r) => r.notices);
-    const { cards, maybeCards } = allNotices.length > 0
-      ? await analyzeWithClaude(allNotices, weekStart, weekEnd)
-      : { cards: [], maybeCards: [] };
+    const { cards, maybeCards } =
+      allNotices.length > 0
+        ? await analyzeWithClaude(allNotices, weekStart, weekEnd)
+        : { cards: [], maybeCards: [] };
     console.log(
       `[doffin-scout] Relevante for SoCentral: ${cards.length}, mulig relevante: ${maybeCards.length}`,
     );
 
-    const html = formatEmailHtml(cards, maybeCards, totalCount, weekStart, weekEnd);
+    const html = formatEmailHtml(
+      cards,
+      maybeCards,
+      totalCount,
+      weekStart,
+      weekEnd,
+    );
     await sendEmail(subject, html);
     console.log("[doffin-scout] Ukentlig epost sendt");
   } catch (err) {
@@ -170,7 +177,6 @@ function formatNorwegianDateFromString(dateStr) {
   return d.toLocaleDateString("nb-NO", {
     day: "numeric",
     month: "long",
-
   });
 }
 
@@ -227,7 +233,9 @@ async function fetchClaude(body, retries = 3) {
 
     if (res.status === 429 && attempt < retries - 1) {
       const waitMs = 60000 * (attempt + 1);
-      console.log(`[doffin-scout] 429 rate limit – venter ${waitMs / 1000}s før nytt forsøk (${attempt + 1}/${retries - 1})...`);
+      console.log(
+        `[doffin-scout] 429 rate limit - venter ${waitMs / 1000}s før nytt forsøk (${attempt + 1}/${retries - 1})...`,
+      );
       await sleep(waitMs);
       continue;
     }
@@ -264,7 +272,7 @@ async function analyzeWithClaude(notices, weekStart, weekEnd) {
     })
     .join("\n\n");
 
-  const userMessage = `Her er anskaffelser publisert på Doffin i perioden ${weekStart} – ${weekEnd}:\n\n${noticesSummary}`;
+  const userMessage = `Her er anskaffelser publisert på Doffin i perioden ${weekStart} - ${weekEnd}:\n\n${noticesSummary}`;
 
   const res = await fetchClaude({
     model: "claude-sonnet-4-6",
@@ -340,7 +348,8 @@ function formatEmailHtml(cards, maybeCards, totalCount, weekStart, weekEnd) {
 
   const F = `-apple-system,'Helvetica Neue',Helvetica,Arial,sans-serif`;
   const hr = `<hr class="c-rule" style="border:none;border-top:1px solid #d2d2d7;margin:0 0 28px">`;
-  const label = (t) => `<p style="margin:0 0 14px;font-family:${F};font-size:11px;font-weight:600;letter-spacing:0.09em;text-transform:uppercase;color:#6e6e73" class="c-meta">${t}</p>`;
+  const label = (t) =>
+    `<p style="margin:0 0 14px;font-family:${F};font-size:11px;font-weight:600;letter-spacing:0.09em;text-transform:uppercase;color:#6e6e73" class="c-meta">${t}</p>`;
 
   const renderNotice = (card) => `
     <p style="margin:0 0 3px;font-family:${F};font-size:15px;font-weight:600;line-height:1.35;color:#1d1d1f" class="c-body">${escHtml(card.title)}</p>
@@ -348,11 +357,12 @@ function formatEmailHtml(cards, maybeCards, totalCount, weekStart, weekEnd) {
     ${card.relevance ? `<p style="margin:0 0 7px;font-family:${F};font-size:14px;line-height:1.65;color:#1d1d1f" class="c-body">${escHtml(card.relevance)}</p>` : ""}
     <p style="margin:0 0 28px">${card.link ? `<a href="${card.link}" style="font-family:${F};font-size:13px;font-weight:500;color:#0066cc;text-decoration:none" class="c-link">Se utlysning →</a>` : ""}</p>`;
 
-  const lede = relevantCount > 0
-    ? `Claude identifiserte <strong>${relevantCount} ${relevantCount === 1 ? "mulighet" : "muligheter"}</strong> som er relevante for SoCentral${maybeCount > 0 ? `, og <strong>${maybeCount}</strong> som kan være verdt å se nærmere på` : ""}.`
-    : maybeCount > 0
-      ? `Ingen klare treff, men <strong>${maybeCount}</strong> utlysninger kan være verdt å se nærmere på.`
-      : "Ingen av dem ble vurdert som relevante for SoCentral.";
+  const lede =
+    relevantCount > 0
+      ? `Claude identifiserte <strong>${relevantCount} ${relevantCount === 1 ? "mulighet" : "muligheter"}</strong> som er relevante for SoCentral${maybeCount > 0 ? `, og <strong>${maybeCount}</strong> som kan være verdt å se nærmere på` : ""}.`
+      : maybeCount > 0
+        ? `Ingen klare treff, men <strong>${maybeCount}</strong> utlysninger kan være verdt å se nærmere på.`
+        : "Ingen av dem ble vurdert som relevante for SoCentral.";
 
   return `<!DOCTYPE html>
 <html lang="no">
@@ -379,22 +389,30 @@ function formatEmailHtml(cards, maybeCards, totalCount, weekStart, weekEnd) {
 
   ${label(`Doffin Scout · Uke ${weekNum} · Oslo, Viken og ikke angitt region`)}
 
-  <p style="margin:0 0 32px;font-family:${F};font-size:28px;font-weight:700;letter-spacing:-0.5px;line-height:1.15;color:#1d1d1f" class="c-body">${weekStartFormatted} – ${weekEndFormatted}</p>
+  <p style="margin:0 0 32px;font-family:${F};font-size:28px;font-weight:700;letter-spacing:-0.5px;line-height:1.15;color:#1d1d1f" class="c-body">${weekStartFormatted} - ${weekEndFormatted}</p>
 
   <p style="margin:0 0 32px;font-family:${F};font-size:15px;line-height:1.7;color:#1d1d1f" class="c-body">Doffin hadde <strong>${totalCount} nye utlysninger</strong> i Oslo og Viken samt utlysninger uten angitt region forrige uke. ${lede}</p>
 
 
-  ${relevantCount > 0 ? `
+  ${
+    relevantCount > 0
+      ? `
   ${hr}
   <p style="margin:0 0 18px;font-family:${F};font-size:15px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#1a8f45" class="c-green">Relevante muligheter</p>
   ${cards.map(renderNotice).join("")}
-  ` : ""}
+  `
+      : ""
+  }
 
-  ${maybeCount > 0 ? `
+  ${
+    maybeCount > 0
+      ? `
   ${hr}
   <p style="margin:0 0 18px;font-family:${F};font-size:15px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#0066cc" class="c-blue">Kan være relevant</p>
   ${maybeCards.map(renderNotice).join("")}
-  ` : ""}
+  `
+      : ""
+  }
 
   ${hr}
   <p style="margin:0 0 18px;font-family:${F};font-size:15px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#1d1d1f" class="c-body">Se alle utlysninger i perioden</p>
