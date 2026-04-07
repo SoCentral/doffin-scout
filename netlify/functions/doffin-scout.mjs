@@ -74,8 +74,7 @@ Svar med et rent JSON-objekt — ingen annen tekst, ingen markdown-formatering, 
       "relevance": "1-2 setninger om hva som kan gjøre dette relevant, og hva som er usikkert",
       "link": "https://doffin.no/notices/2026-XXXXXX"
     }
-  ],
-  "summary": "2-3 setninger om hva slags utlysninger som dominerte denne dagen – temaer, sektorer, geografi. Skriv som om det inngår i et ukentlig overblikk."
+  ]
 }
 
 Hvis ingen anskaffelser er relevante, returner cards som en tom liste: [].
@@ -113,52 +112,16 @@ export default async function handler() {
       return;
     }
 
-    // Analyser hver dag sekvensielt med pause for å holde seg under rate limit (10k tokens/min)
-    const analyses = [];
-    for (let i = 0; i < dayResults.length; i++) {
-      if (i > 0) await sleep(65000);
-      const result =
-        dayResults[i].notices.length > 0
-          ? await analyzeWithClaude(dayResults[i].notices, dates[i])
-          : { cards: [], maybeCards: [] };
-      analyses.push(result);
-    }
-
-    // Slå sammen og dedupliser på id, samle daglige sammendrag
-    const seenIds = new Set();
-    const cards = [];
-    const maybeCards = [];
-    const summaries = [];
-    for (const analysis of analyses) {
-      for (const card of analysis.cards) {
-        if (!seenIds.has(card.id)) {
-          seenIds.add(card.id);
-          cards.push(card);
-        }
-      }
-      for (const card of analysis.maybeCards) {
-        if (!seenIds.has(card.id)) {
-          seenIds.add(card.id);
-          maybeCards.push(card);
-        }
-      }
-      if (analysis.summary) summaries.push(analysis.summary);
-    }
-    const weeklySummary = summaries.length > 0
-      ? await synthesizeWeeklySummary(summaries)
-      : "";
+    // Analyser alle utlysninger i ett Claude-kall (unngår lange søvnpauser mellom dager)
+    const allNotices = dayResults.flatMap((r) => r.notices);
+    const { cards, maybeCards } = allNotices.length > 0
+      ? await analyzeWithClaude(allNotices, weekStart, weekEnd)
+      : { cards: [], maybeCards: [] };
     console.log(
       `[doffin-scout] Relevante for SoCentral: ${cards.length}, mulig relevante: ${maybeCards.length}`,
     );
 
-    const html = formatEmailHtml(
-      cards,
-      maybeCards,
-      totalCount,
-      weekStart,
-      weekEnd,
-      weeklySummary,
-    );
+    const html = formatEmailHtml(cards, maybeCards, totalCount, weekStart, weekEnd);
     await sendEmail(subject, html);
     console.log("[doffin-scout] Ukentlig epost sendt");
   } catch (err) {
@@ -273,7 +236,7 @@ async function fetchClaude(body, retries = 3) {
   }
 }
 
-async function analyzeWithClaude(notices, yesterday) {
+async function analyzeWithClaude(notices, weekStart, weekEnd) {
   const noticesSummary = notices
     .map((n, i) => {
       const title = n.heading ?? "Uten tittel";
@@ -301,11 +264,11 @@ async function analyzeWithClaude(notices, yesterday) {
     })
     .join("\n\n");
 
-  const userMessage = `Her er anskaffelser publisert på Doffin ${yesterday}:\n\n${noticesSummary}`;
+  const userMessage = `Her er anskaffelser publisert på Doffin i perioden ${weekStart} – ${weekEnd}:\n\n${noticesSummary}`;
 
   const res = await fetchClaude({
     model: "claude-sonnet-4-6",
-    max_tokens: 2500,
+    max_tokens: 8000,
     system: CLAUDE_SYSTEM_PROMPT,
     messages: [{ role: "user", content: userMessage }],
   });
@@ -335,37 +298,12 @@ async function analyzeWithClaude(notices, yesterday) {
   } catch (e) {
     console.error("[doffin-scout] JSON-parsing feilet:", e.message);
     console.error("[doffin-scout] Råtekst:", rawText.slice(0, 1000));
-    // Graceful fallback: ingen relevante kort, men vis summary hvis mulig
-    return {
-      cards: [],
-      summary: "Kunne ikke tolke analyseresultatet fra Claude.",
-    };
+    return { cards: [], maybeCards: [] };
   }
 
   const cards = Array.isArray(parsed.cards) ? parsed.cards : [];
   const maybeCards = Array.isArray(parsed.maybeCards) ? parsed.maybeCards : [];
-  const summary = typeof parsed.summary === "string" ? parsed.summary : "";
-
-  return { cards, maybeCards, summary };
-}
-
-// ─── Ukentlig sammendrag ──────────────────────────────────────────────────────
-
-async function synthesizeWeeklySummary(dailySummaries) {
-  const res = await fetchClaude({
-    model: "claude-sonnet-4-6",
-    max_tokens: 300,
-    messages: [
-      {
-        role: "user",
-        content: `Her er korte daglige oppsummeringer av anskaffelser publisert på Doffin forrige uke. Skriv ett sammenhengende avsnitt på 3–4 setninger som gir et helhetlig bilde av hva slags utlysninger som dominerte uken – temaer, sektorer og eventuelle mønstre. Ikke nevn datoer, dager eller at dette er daglige sammendrag. Svar på norsk med flytende prosa.\n\n${dailySummaries.join("\n\n")}`,
-      },
-    ],
-  });
-
-  if (!res.ok) return dailySummaries.join(" ");
-  const data = await res.json();
-  return (data.content?.[0]?.text ?? "").trim();
+  return { cards, maybeCards };
 }
 
 // ─── Epost via Resend ─────────────────────────────────────────────────────────
@@ -393,7 +331,7 @@ async function sendEmail(subject, html) {
 
 // ─── HTML-formatering ─────────────────────────────────────────────────────────
 
-function formatEmailHtml(cards, maybeCards, totalCount, weekStart, weekEnd, weeklySummary = "") {
+function formatEmailHtml(cards, maybeCards, totalCount, weekStart, weekEnd) {
   const weekStartFormatted = formatNorwegianDateFromString(weekStart);
   const weekEndFormatted = formatNorwegianDateFromString(weekEnd);
   const weekNum = getISOWeekNumber(weekStart);
@@ -445,11 +383,6 @@ function formatEmailHtml(cards, maybeCards, totalCount, weekStart, weekEnd, week
 
   <p style="margin:0 0 32px;font-family:${F};font-size:15px;line-height:1.7;color:#1d1d1f" class="c-body">Doffin hadde <strong>${totalCount} nye utlysninger</strong> i Oslo og Viken samt utlysninger uten angitt region forrige uke. ${lede}</p>
 
-  ${weeklySummary ? `
-  ${hr}
-  <p style="margin:0 0 18px;font-family:${F};font-size:15px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#1d1d1f" class="c-body">Ukens bilde</p>
-  <p style="margin:0 0 32px;font-family:${F};font-size:15px;line-height:1.7;color:#1d1d1f" class="c-body">${escHtml(weeklySummary)}</p>
-  ` : ""}
 
   ${relevantCount > 0 ? `
   ${hr}

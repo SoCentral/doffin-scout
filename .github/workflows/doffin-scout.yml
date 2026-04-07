@@ -1,0 +1,27 @@
+name: Doffin Scout
+
+on:
+  schedule:
+    - cron: "0 7 * * 1"  # Mandager 07:00 UTC = 08:00 CET / 09:00 CEST
+  workflow_dispatch:       # Kjør manuelt fra GitHub Actions-fanen
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Kjør Doffin Scout
+        env:
+          DOFFIN_API_KEY: ${{ secrets.DOFFIN_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+        run: node run.mjs

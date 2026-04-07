@@ -13,8 +13,7 @@ try {
     if (key && rest.length) process.env[key.trim()] = rest.join("=").trim();
   }
 } catch {
-  console.error("Fant ikke .env-fil");
-  process.exit(1);
+  // Ingen .env-fil – antar at miljøvariabler er satt eksternt (f.eks. GitHub Actions)
 }
 
 const { default: handler } = await import("./netlify/functions/doffin-scout.mjs");

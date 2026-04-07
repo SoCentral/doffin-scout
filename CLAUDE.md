@@ -45,7 +45,7 @@ Sections (separated by comment banners):
 
 ### Rate limiting
 
-Claude calls are made sequentially with a 65-second sleep between each day to stay within the 10,000 input tokens/minute rate limit. On 429 errors the function retries up to 3 times with exponential backoff (60s, 120s, 180s). The function timeout is set to 900 seconds in `netlify.toml`.
+All notices from the full week are sent in a single Claude call (no per-day loop or sleep). On 429 errors the function retries up to 3 times with exponential backoff (60s, 120s, 180s).
 
 ### Analysis categories
 
