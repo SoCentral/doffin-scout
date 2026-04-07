@@ -28,17 +28,17 @@ The workflow is triggered by `.github/workflows/doffin-scout.yml`, which runs `n
 Sections (separated by comment banners):
 
 - **Config** – `SOCENTRAL_CONTEXT`, `CLAUDE_SYSTEM_PROMPT`. Tune the Claude analysis prompt here.
-- **`handler()`** – orchestrates: get 7 dates → fetch all days in parallel → single Claude call for all notices → email.
+- **`handler()`** – orchestrates: get 7 dates → fetch all days in parallel → analyze each non-empty day sequentially with Claude → email.
 - **`getWeekDates()`** – returns an array of 7 ISO date strings for Mon–Sun of last week (Oslo timezone).
 - **`getISOWeekNumber()`** – returns the ISO week number for a date string.
 - **`fetchDoffinNotices(date)`** – calls `https://api.doffin.no/public/v2/search` with `location=NO08&location=anyw` and a single date. Uses the `Ocp-Apim-Subscription-Key` header.
-- **`analyzeWithClaude(notices, weekStart, weekEnd)`** – calls the Anthropic Messages API directly via `fetch` (no SDK). Uses `claude-sonnet-4-6`, `max_tokens: 8000`. Returns `{ cards, maybeCards }`.
+- **`analyzeWithClaude(notices, date)`** – calls the Anthropic Messages API directly via `fetch` (no SDK). Uses `claude-sonnet-4-6`, `max_tokens: 2500`. Returns `{ cards, maybeCards }`.
 - **`sendEmail(subject, html)`** – calls the Resend API. Recipients are read from `EMAIL_TO` (comma-separated).
 - **`formatEmailHtml(cards, maybeCards, totalCount, weekStart, weekEnd)`** – builds a plain-text-style HTML email (no tables, `<body>` is the email, `max-width: 600px`). Dark mode supported via `@media (prefers-color-scheme: dark)` in `<head>`.
 
 ### Rate limiting
 
-All notices from the full week are sent in a single Claude call (no per-day loop or sleep). On 429 errors the function retries up to 3 times with exponential backoff (60s, 120s, 180s).
+Claude is called once per non-empty day, sequentially, with a 65-second sleep between calls to stay within the 10,000 input tokens/minute rate limit. On 429 errors the function retries up to 3 times with exponential backoff (60s, 120s, 180s). GitHub Actions supports up to 6 hours, so the ~4–5 minute total runtime is not an issue.
 
 ### Analysis categories
 
