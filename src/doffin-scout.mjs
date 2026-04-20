@@ -14,7 +14,8 @@ const DOFFIN_BASE_URL = "https://doffin.no/notices";
 const SOCENTRAL_CONTEXT = `
 SoCentral AS er en norsk "mellomromsaktør" basert i Oslo som jobber i skjæringsfeltet
 mellom offentlig, privat og frivillig sektor. Vi initierer og fasiliterer samarbeid på
-tvers av sektorer rundt samfunnsutfordringer som klima, bolig, inkludering og demokrati.
+tvers av sektorer rundt samfunnsutfordringer som klima, bolig, inkludering og demokrati.Vi jobber typisk med
+kommuner, statsforvaltere, stiftelser og større private aktører Våre prosjekter inkluderer som oftest samarbeid med en eller flere aktører fra ulike sektorer.
 
 Vi tilbyr:
 - Prosjektutvikling og -ledelse av komplekse prosjekter som krever samarbeid mellom aktører
@@ -25,8 +26,9 @@ Vi tilbyr:
 - Kurs og kompetanseutvikling for samfunnsutviklere
 - Prosessdesign og prosjektledelse for tverrsektorielle initiativ
 
-Vi har 230+ medlemmer (samfunnsutviklere), 100+ medlemsvirksomheter, og jobber typisk med
-kommuner, statsforvaltere, stiftelser og større private aktører.
+Vi samarbeider gjerne i prosjekter hvor vi i utgangspunktet ikke leder prosjektet eller innehar kjernekompetansen, men kan bidra til at prosjektet som helhet styrkes ved å inkludere flere i samarbeid eller hvor prosjektet kan styrkes med vår ekspertise. Dette kan f.eks. være forskningsprosjekter hvor vi bidrasr med medvirkning, prosjektledelse eller spesifikke deler av oppdraget.
+
+Vi drifter også et miljø for samfunnsutviklere på Sentralen i Oslo med 230+ medlemmer (samfunnsutviklere) fordelt på 100+ medlemsvirksomheter.
 `.trim();
 
 // Claude svarer nå med ren JSON — ingen markdown, ingen regex-parsing nødvendig
@@ -123,19 +125,33 @@ export default async function handler() {
       if (i > 0) await sleep(65000);
       const result = await analyzeWithClaude(dayResults[i].notices, dates[i]);
       for (const card of result.cards) {
-        if (!seenIds.has(card.id)) { seenIds.add(card.id); cards.push(card); }
+        if (!seenIds.has(card.id)) {
+          seenIds.add(card.id);
+          cards.push(card);
+        }
       }
       for (const card of result.maybeCards) {
-        if (!seenIds.has(card.id)) { seenIds.add(card.id); maybeCards.push(card); }
+        if (!seenIds.has(card.id)) {
+          seenIds.add(card.id);
+          maybeCards.push(card);
+        }
       }
       if (result.summary) summaries.push(result.summary);
     }
-    const weeklySummary = summaries.length > 0 ? await synthesizeWeeklySummary(summaries) : "";
+    const weeklySummary =
+      summaries.length > 0 ? await synthesizeWeeklySummary(summaries) : "";
     console.log(
       `[doffin-scout] Relevante for SoCentral: ${cards.length}, mulig relevante: ${maybeCards.length}`,
     );
 
-    const html = formatEmailHtml(cards, maybeCards, totalCount, weekStart, weekEnd, weeklySummary);
+    const html = formatEmailHtml(
+      cards,
+      maybeCards,
+      totalCount,
+      weekStart,
+      weekEnd,
+      weeklySummary,
+    );
     await sendEmail(subject, html);
     console.log("[doffin-scout] Ukentlig epost sendt");
   } catch (err) {
@@ -366,7 +382,14 @@ async function sendEmail(subject, html) {
 
 // ─── HTML-formatering ─────────────────────────────────────────────────────────
 
-function formatEmailHtml(cards, maybeCards, totalCount, weekStart, weekEnd, weeklySummary = "") {
+function formatEmailHtml(
+  cards,
+  maybeCards,
+  totalCount,
+  weekStart,
+  weekEnd,
+  weeklySummary = "",
+) {
   const weekStartFormatted = formatNorwegianDateFromString(weekStart);
   const weekEndFormatted = formatNorwegianDateFromString(weekEnd);
   const weekNum = getISOWeekNumber(weekStart);
@@ -420,11 +443,15 @@ function formatEmailHtml(cards, maybeCards, totalCount, weekStart, weekEnd, week
 
   <p style="margin:0 0 32px;font-family:${F};font-size:15px;line-height:1.7;color:#1d1d1f" class="c-body">Doffin hadde <strong>${totalCount} nye utlysninger</strong> i Oslo og Viken samt utlysninger uten angitt region forrige uke. ${lede}</p>
 
-  ${weeklySummary ? `
+  ${
+    weeklySummary
+      ? `
   ${hr}
   <p style="margin:0 0 18px;font-family:${F};font-size:15px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#1d1d1f" class="c-body">Ukens bilde</p>
   <p style="margin:0 0 32px;font-family:${F};font-size:15px;line-height:1.7;color:#1d1d1f" class="c-body">${escHtml(weeklySummary)}</p>
-  ` : ""}
+  `
+      : ""
+  }
 
   ${
     relevantCount > 0
