@@ -196,35 +196,50 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // ─── Doffin API ───────────────────────────────────────────────────────────────
 
 async function fetchDoffinNotices(apiDate) {
-  const params = new URLSearchParams({
-    numHitsPerPage: "200",
-    page: "1",
+  const PAGE_SIZE = 100; // API max
+  const baseParams = {
+    numHitsPerPage: String(PAGE_SIZE),
     status: "ACTIVE",
     issueDateFrom: apiDate,
     issueDateTo: apiDate,
     sortBy: "PUBLICATION_DATE_DESC",
+  };
+
+  const fetchPage = async (page) => {
+    const params = new URLSearchParams({ ...baseParams, page: String(page) });
+    const res = await fetch(`${DOFFIN_API_URL}?${params}`, {
+      headers: { "Ocp-Apim-Subscription-Key": process.env.DOFFIN_API_KEY },
+    });
+    if (!res.ok)
+      throw new Error(`Doffin API returnerte ${res.status}: ${res.statusText}`);
+    return res.json();
+  };
+
+  const first = await fetchPage(1);
+  const totalCount = first.numHitsTotal ?? 0;
+  const allHits = [...(first.hits ?? [])];
+
+  const totalPages = Math.ceil(totalCount / PAGE_SIZE);
+  for (let p = 2; p <= totalPages; p++) {
+    const data = await fetchPage(p);
+    allHits.push(...(data.hits ?? []));
+  }
+
+  // Behold kun tjenester (primær CPV-kode starter med 50–98).
+  // Koder 03–48 er varer/utstyr, 45 er bygg og anlegg.
+  // Utlysninger uten CPV-koder beholdes — Claude vurderer dem.
+  const services = allHits.filter((h) => {
+    const primary = h.cpvCodes?.[0];
+    if (!primary) return true;
+    return parseInt(primary.slice(0, 2), 10) >= 50;
   });
-  params.append("location", "NO08");
-  params.append("location", "anyw");
 
-  const res = await fetch(`${DOFFIN_API_URL}?${params}`, {
-    headers: { "Ocp-Apim-Subscription-Key": process.env.DOFFIN_API_KEY },
-  });
-
-  if (!res.ok)
-    throw new Error(`Doffin API returnerte ${res.status}: ${res.statusText}`);
-
-  const data = await res.json();
-  const totalCount = data.numHitsTotal ?? 0;
-  console.log("[doffin-scout] numHitsTotal:", totalCount);
-
-  const hits = data.hits ?? [];
+  console.log(
+    `[doffin-scout] ${apiDate}: ${services.length} tjenester av ${totalCount} totalt`,
+  );
   return {
-    totalCount,
-    notices: hits.map((h) => ({
-      ...h,
-      doffinLink: `${DOFFIN_BASE_URL}/${h.id}`,
-    })),
+    totalCount: services.length,
+    notices: services.map((h) => ({ ...h, doffinLink: `${DOFFIN_BASE_URL}/${h.id}` })),
   };
 }
 
@@ -242,10 +257,10 @@ async function fetchClaude(body, retries = 3) {
       body: JSON.stringify(body),
     });
 
-    if (res.status === 429 && attempt < retries - 1) {
+    if ((res.status === 429 || res.status === 529) && attempt < retries - 1) {
       const waitMs = 60000 * (attempt + 1);
       console.log(
-        `[doffin-scout] 429 rate limit - venter ${waitMs / 1000}s før nytt forsøk (${attempt + 1}/${retries - 1})...`,
+        `[doffin-scout] ${res.status} - venter ${waitMs / 1000}s før nytt forsøk (${attempt + 1}/${retries - 1})...`,
       );
       await sleep(waitMs);
       continue;
@@ -398,11 +413,11 @@ function formatEmailHtml(cards, maybeCards, totalCount, weekStart, weekEnd) {
 </head>
 <body style="margin:0;padding:40px 28px 52px;font-family:${F};font-size:15px;line-height:1.7;color:#1d1d1f;background:#ffffff;max-width:600px">
 
-  ${label(`Doffin Scout · Uke ${weekNum} · Oslo, Viken og ikke angitt region`)}
+  ${label(`Doffin Scout · Uke ${weekNum} · Hele Norge`)}
 
   <p style="margin:0 0 32px;font-family:${F};font-size:28px;font-weight:700;letter-spacing:-0.5px;line-height:1.15;color:#1d1d1f" class="c-body">${weekStartFormatted} - ${weekEndFormatted}</p>
 
-  <p style="margin:0 0 32px;font-family:${F};font-size:15px;line-height:1.7;color:#1d1d1f" class="c-body">Doffin hadde <strong>${totalCount} nye utlysninger</strong> i Oslo og Viken samt utlysninger uten angitt region forrige uke. ${lede}</p>
+  <p style="margin:0 0 32px;font-family:${F};font-size:15px;line-height:1.7;color:#1d1d1f" class="c-body">Doffin hadde <strong>${totalCount} nye utlysninger</strong> i hele Norge forrige uke. ${lede}</p>
 
   ${
     relevantCount > 0
@@ -426,7 +441,6 @@ function formatEmailHtml(cards, maybeCards, totalCount, weekStart, weekEnd) {
 
   ${hr}
   <p style="margin:0 0 18px;font-family:${F};font-size:15px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#1d1d1f" class="c-body">Se alle utlysninger i perioden</p>
-  <p style="margin:0 0 6px"><a href="https://doffin.no/search?page=1&amp;location=NO08%2Canyw&amp;fromDate=${weekStart}&amp;toDate=${weekEnd}&amp;status=ACTIVE" style="font-family:${F};font-size:14px;color:#0066cc;text-decoration:none" class="c-link">Oslo og Viken + ikke angitt region →</a></p>
   <p style="margin:0 0 40px"><a href="https://doffin.no/search?page=1&amp;fromDate=${weekStart}&amp;toDate=${weekEnd}&amp;status=ACTIVE" style="font-family:${F};font-size:14px;color:#0066cc;text-decoration:none" class="c-link">Alle regioner →</a></p>
 
   <p style="margin:0;font-family:${F};font-size:11px;color:#aeaeb2" class="c-muted">Generert av Doffin Scout · SoCentral AS · <a href="https://doffin.no" style="color:#aeaeb2;text-decoration:none">doffin.no</a></p>

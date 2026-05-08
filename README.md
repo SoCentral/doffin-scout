@@ -1,6 +1,6 @@
 # Doffin Scout
 
-Ukentlig Doffin-scanner for SoCentral. Kjører mandager kl. 08:00 Oslo-tid (07:00 UTC) via GitHub Actions, henter aktive offentlige anskaffelser fra Oslo og Viken (`NO08`) samt utlysninger uten angitt region (`anyw`) for hele forrige uke, analyserer dem med Claude og sender en e-postdigest til mottakerlisten.
+Ukentlig Doffin-scanner for SoCentral. Kjører mandager kl. 08:00 Oslo-tid (07:00 UTC) via GitHub Actions, henter aktive tjenesteutlysninger (CPV 50–98) fra hele Norge for hele forrige uke, analyserer dem med Claude og sender en e-postdigest til mottakerlisten.
 
 ## Miljøvariabler
 
@@ -36,7 +36,7 @@ Workflowen ligger i `.github/workflows/doffin-scout.yml`.
 node debug.mjs 2026-03-16 2026-03-22
 ```
 
-`debug.mjs` bruker samme parametere som produksjonsfunksjonen (NO08 + anyw, 200 per dag) og lister alle utlysninger med tittel, oppdragsgiver og lenke.
+`debug.mjs` bruker samme parametere som produksjonsfunksjonen og lister alle tjenesteutlysninger med tittel, oppdragsgiver og lenke. Ingen Claude-kall eller e-post sendes.
 
 ## Forhåndsvisning av e-post
 
@@ -46,14 +46,15 @@ node debug.mjs 2026-03-16 2026-03-22
 
 | Hva | Hvor |
 |---|---|
-| Regionsfilter | `location`-parametere i `fetchDoffinNotices()` — `NO08` = Oslo og Viken (NUTS2), `anyw` = ikke angitt region |
+| Regionsfilter | `location`-parametere i `fetchDoffinNotices()` — ingen filter gir hele Norge; `NO08` = Oslo og Viken, `anyw` = ikke angitt region |
+| CPV-filter | `services`-filteret i `fetchDoffinNotices()` — beholder utlysninger der primær CPV-kode starter med 50–98 (tjenester) |
 | Relevanskriterier og SoCentral-beskrivelse | `SOCENTRAL_CONTEXT` + `CLAUDE_SYSTEM_PROMPT` |
 | Tidspunkt | cron-uttrykket i `.github/workflows/doffin-scout.yml` |
 | Mottakere | `EMAIL_TO` i secrets / `.env` |
 
 ## Kostnadsestimat
 
-~$0.10–0.20/uke (Claude Sonnet 4.6, ett enkelt Claude-kall per uke). Doffin API, Resend og GitHub Actions er gratis på dette volumet.
+~$0.10–0.20/uke (Claude Sonnet 4.6, ett Claude-kall per dag med utlysninger). Doffin API, Resend og GitHub Actions er gratis på dette volumet.
 
 ## Filstruktur
 

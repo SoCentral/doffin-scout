@@ -5,8 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this project does
 
 Doffin Scout is a GitHub Actions workflow that runs every Monday at 07:00 UTC (08:00 CET / 09:00 CEST). It:
-1. Fetches active public procurements from the Doffin API for the previous 7 days (Mon–Sun), filtered to Oslo og Viken (`NO08`) and notices without a specified region (`anyw`)
-2. Sends all notices in a single Claude call to categorize opportunities for SoCentral AS
+1. Fetches active service procurements (CPV 50–98) from the Doffin API for the previous 7 days, nationally (no location filter)
+2. Sends notices per day to Claude to categorize opportunities for SoCentral AS
 3. Sends a formatted plain-text-style HTML email digest via Resend
 
 ## Commands
@@ -31,14 +31,14 @@ Sections (separated by comment banners):
 - **`handler()`** – orchestrates: get 7 dates → fetch all days in parallel → analyze each non-empty day sequentially with Claude → email.
 - **`getWeekDates()`** – returns an array of 7 ISO date strings for Mon–Sun of last week (Oslo timezone).
 - **`getISOWeekNumber()`** – returns the ISO week number for a date string.
-- **`fetchDoffinNotices(date)`** – calls `https://api.doffin.no/public/v2/search` with `location=NO08&location=anyw` and a single date. Uses the `Ocp-Apim-Subscription-Key` header.
+- **`fetchDoffinNotices(date)`** – calls `https://api.doffin.no/public/v2/search` for a single date, nationally (no location filter). Paginates with `numHitsPerPage=100` (API max). Filters client-side to keep only notices where the primary CPV code starts with 50–98 (services). Uses the `Ocp-Apim-Subscription-Key` header.
 - **`analyzeWithClaude(notices, date)`** – calls the Anthropic Messages API directly via `fetch` (no SDK). Uses `claude-sonnet-4-6`, `max_tokens: 2500`. Returns `{ cards, maybeCards }`.
 - **`sendEmail(subject, html)`** – calls the Resend API. Recipients are read from `EMAIL_TO` (comma-separated).
 - **`formatEmailHtml(cards, maybeCards, totalCount, weekStart, weekEnd)`** – builds a plain-text-style HTML email (no tables, `<body>` is the email, `max-width: 600px`). Dark mode supported via `@media (prefers-color-scheme: dark)` in `<head>`.
 
 ### Rate limiting
 
-Claude is called once per non-empty day, sequentially, with a 65-second sleep between calls to stay within the 10,000 input tokens/minute rate limit. On 429 errors the function retries up to 3 times with exponential backoff (60s, 120s, 180s). GitHub Actions supports up to 6 hours, so the ~4–5 minute total runtime is not an issue.
+Claude is called once per non-empty day, sequentially, with a 65-second sleep between calls to stay within the 10,000 input tokens/minute rate limit. On 429 (rate limit) or 529 (overloaded) errors the function retries up to 3 times with exponential backoff (60s, 120s, 180s). GitHub Actions supports up to 6 hours, so the ~4–5 minute total runtime is not an issue.
 
 ### Analysis categories
 
@@ -57,20 +57,22 @@ Claude sorts each procurement into one of three categories:
 3. **Lede** – total count + how many relevant/maybe
 4. **Relevante muligheter** – green section header, full cards
 5. **Kan være relevant** – blue section header, full cards
-6. **Se alle utlysninger** – two Doffin search links (Oslo+Viken filtered, and all regions), both with `status=ACTIVE`
+6. **Se alle utlysninger** – one Doffin search link (all regions) with `status=ACTIVE`
 7. **Footer**
 
 ### Doffin API
 
 - Endpoint: `https://api.doffin.no/public/v2/search`
 - Auth header: `Ocp-Apim-Subscription-Key`
-- Location filter: `params.append("location", "NO08")` / `params.append("location", "anyw")` — use `append()` for repeated keys
-- Key params: `issueDateFrom`, `issueDateTo`, `status=ACTIVE`, `numHitsPerPage` (set to 200), `sortBy`
+- Location filter: none (fetches all of Norway)
+- Key params: `issueDateFrom`, `issueDateTo`, `status=ACTIVE`, `numHitsPerPage=100` (API max), `page`, `sortBy`
+- Pagination: fetches all pages if `numHitsTotal > 100`
+- CPV filter (client-side): keeps only notices where `cpvCodes[0]` starts with `50`–`98` (services); notices with no CPV codes are kept for Claude to assess
 
 ### Doffin web search URL format
 
 ```
-https://doffin.no/search?page=1&location=NO08%2Canyw&fromDate=YYYY-MM-DD&toDate=YYYY-MM-DD&status=ACTIVE
+https://doffin.no/search?page=1&fromDate=YYYY-MM-DD&toDate=YYYY-MM-DD&status=ACTIVE
 ```
 
 ### Required environment variables
@@ -94,7 +96,8 @@ Set as repository secrets in GitHub for production, or in `.env` for local runs.
 
 ## Customization points
 
-- **Region filter**: `location` params in `fetchDoffinNotices()` — `NO08` = Oslo og Viken (NUTS2 region), `anyw` = not specified
+- **Region filter**: none by default — fetches all of Norway. Add `location` params in `fetchDoffinNotices()` to restrict (e.g. `NO08` = Oslo og Viken, `anyw` = not specified)
+- **CPV filter**: `services` filter in `fetchDoffinNotices()` — keeps notices where primary CPV ≥ 50 (services). CPV 03–48 = goods/supplies, 45 = construction works. The Doffin API does not support `contractNature` filtering natively.
 - **Relevance criteria**: `SOCENTRAL_CONTEXT` and `CLAUDE_SYSTEM_PROMPT`
 - **Schedule**: cron string in `.github/workflows/doffin-scout.yml`
 - **Recipients**: `EMAIL_TO` env var / secret (comma-separated)

@@ -58,25 +58,33 @@ const toDate = process.argv[3] ?? getLastWeekDates().to;
 // ─── Søkefunksjon ─────────────────────────────────────────────────────────────
 
 async function search() {
-  const params = new URLSearchParams({
-    numHitsPerPage: "200",
-    page: "1",
+  const PAGE_SIZE = 100;
+  const baseParams = {
+    numHitsPerPage: String(PAGE_SIZE),
     status: "ACTIVE",
     issueDateFrom: fromDate,
     issueDateTo: toDate,
     sortBy: "PUBLICATION_DATE_DESC",
-  });
-  params.append("location", "NO08");
-  params.append("location", "anyw");
+  };
 
-  const url = `${SEARCH_URL}?${params}`;
-  const res = await fetch(url, {
-    headers: { "Ocp-Apim-Subscription-Key": API_KEY },
-  });
+  const fetchPage = async (page) => {
+    const params = new URLSearchParams({ ...baseParams, page: String(page) });
+    const url = `${SEARCH_URL}?${params}`;
+    const res = await fetch(url, { headers: { "Ocp-Apim-Subscription-Key": API_KEY } });
+    const bodyText = await res.text();
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${bodyText.slice(0, 300)}`);
+    return { data: JSON.parse(bodyText), url };
+  };
 
-  const bodyText = await res.text();
-  if (!res.ok) throw new Error(`HTTP ${res.status}: ${bodyText.slice(0, 300)}`);
-  return { data: JSON.parse(bodyText), url };
+  const { data: first, url } = await fetchPage(1);
+  const totalCount = first.numHitsTotal ?? 0;
+  const allHits = [...(first.hits ?? [])];
+  const totalPages = Math.ceil(totalCount / PAGE_SIZE);
+  for (let p = 2; p <= totalPages; p++) {
+    const { data } = await fetchPage(p);
+    allHits.push(...(data.hits ?? []));
+  }
+  return { data: { ...first, hits: allHits }, url };
 }
 
 // ─── Hovedlogikk ──────────────────────────────────────────────────────────────
@@ -84,7 +92,7 @@ async function search() {
 async function main() {
   console.log(`\n${"=".repeat(70)}`);
   console.log(`Doffin Scout – ${fromDate} → ${toDate}`);
-  console.log(`Lokasjon: NO08 + anyw | Status: ACTIVE | numHitsPerPage: 200`);
+  console.log(`Lokasjon: hele Norge | Status: ACTIVE | numHitsPerPage: 100 (med paginering)`);
   console.log("=".repeat(70));
 
   const { data, url } = await search();
