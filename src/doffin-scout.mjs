@@ -26,7 +26,7 @@ Vi tilbyr:
 - Kurs og kompetanseutvikling for samfunnsutviklere
 - Prosessdesign og prosjektledelse for tverrsektorielle initiativ
 
-Vi samarbeider gjerne i prosjekter hvor vi i utgangspunktet ikke leder prosjektet eller innehar kjernekompetansen, men kan bidra til at prosjektet som helhet styrkes ved å inkludere flere i samarbeid eller hvor prosjektet kan styrkes med vår ekspertise. Dette kan f.eks. være forskningsprosjekter hvor vi bidrasr med medvirkning, prosjektledelse eller spesifikke deler av oppdraget.
+Vi samarbeider gjerne i prosjekter hvor vi i utgangspunktet ikke leder prosjektet eller innehar kjernekompetansen, men kan bidra til at prosjektet som helhet styrkes ved å inkludere flere i samarbeid eller hvor prosjektet kan styrkes med vår ekspertise. Dette kan f.eks. være forskningsprosjekter hvor vi bidrar med medvirkning, prosjektledelse eller spesifikke deler av oppdraget.
 
 Vi drifter også et miljø for samfunnsutviklere på Sentralen i Oslo med 230+ medlemmer (samfunnsutviklere) fordelt på 100+ medlemsvirksomheter.
 `.trim();
