@@ -14,8 +14,7 @@ const DOFFIN_BASE_URL = "https://doffin.no/notices";
 const SOCENTRAL_CONTEXT = `
 SoCentral AS er en norsk "mellomromsaktør" basert i Oslo som jobber i skjæringsfeltet
 mellom offentlig, privat og frivillig sektor. Vi initierer og fasiliterer samarbeid på
-tvers av sektorer rundt samfunnsutfordringer som klima, bolig, inkludering og demokrati.Vi jobber typisk med
-kommuner, statsforvaltere, stiftelser og større private aktører Våre prosjekter inkluderer som oftest samarbeid med en eller flere aktører fra ulike sektorer.
+tvers av sektorer rundt samfunnsutfordringer som klima, bolig, inkludering og demokrati. Vi jobber typisk med kommuner, fylkeskommuner, statsforvaltere, stiftelser, frivillig sektor, næringsliv og større private aktører. Våre prosjekter inkluderer som oftest samarbeid med en eller flere aktører fra ulike sektorer.
 
 Vi tilbyr:
 - Prosjektutvikling og -ledelse av komplekse prosjekter som krever samarbeid mellom aktører
