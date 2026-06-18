@@ -16,6 +16,8 @@ SoCentral AS er en norsk "mellomromsaktør" basert i Oslo som jobber i skjæring
 mellom offentlig, privat og frivillig sektor. Vi initierer og fasiliterer samarbeid på
 tvers av sektorer rundt samfunnsutfordringer som klima, bolig, inkludering og demokrati. Vi jobber typisk med kommuner, fylkeskommuner, statsforvaltere, stiftelser, frivillig sektor, næringsliv og større private aktører. Våre prosjekter inkluderer som oftest samarbeid med en eller flere aktører fra ulike sektorer.
 
+En mellomromsaktør er en som utvikler løsninger på samfunnsutfordringer som ingen får til alene. Den kobler aktører på tvers av sektorer, holder prosessen i gang og bygger løsninger i rommet mellom offentlig, privat og sivil sektor der mandatene ofte er uklare, men mye må skje.
+
 Vi tilbyr:
 - Prosjektutvikling og -ledelse av komplekse prosjekter som krever samarbeid mellom aktører
 - Fasilitering av folkepaneler og innbyggermedvirkning
