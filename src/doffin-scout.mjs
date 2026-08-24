@@ -30,6 +30,16 @@ Vi tilbyr:
 Vi samarbeider gjerne i prosjekter hvor vi i utgangspunktet ikke leder prosjektet eller innehar kjernekompetansen, men kan bidra til at prosjektet som helhet styrkes ved å inkludere flere i samarbeid eller hvor prosjektet kan styrkes med vår ekspertise. Dette kan f.eks. være forskningsprosjekter hvor vi bidrar med medvirkning, prosjektledelse eller spesifikke deler av oppdraget.
 
 Vi drifter også et miljø for samfunnsutviklere på Sentralen i Oslo med 230+ medlemmer (samfunnsutviklere) fordelt på 100+ medlemsvirksomheter.
+
+Vi har de siste årene jobbet spesielt med følgende temaer: 
+- Demokratiutvikling og demokratisk innovasjon
+- Byutvikling
+- Entreprenørskap og gründerskap
+- Nabolagshus
+- Oslofjorden
+- Sirkulærøkonomi, spesielt innen ombruk av bygningsmateriell
+
+Vi er for tiden ekstra interessert i oppdrag som lyses ut av fylkeskommuner. 
 `.trim();
 
 // Claude svarer nå med ren JSON — ingen markdown, ingen regex-parsing nødvendig
